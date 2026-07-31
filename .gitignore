@@ -6,7 +6,7 @@
 *.dylib
 *.test
 *.out
-basic
+/basic
 examples/gorm-mysql/gorm-mysql
 examples/gorm-postgres/gorm-postgres
 
@@ -38,6 +38,7 @@ var/
 # Environment files
 .env
 .env.*
+!examples/basic/.env
 
 # OS files
 Thumbs.db
