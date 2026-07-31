@@ -7,6 +7,8 @@
 *.test
 *.out
 basic
+examples/gorm-mysql/gorm-mysql
+examples/gorm-postgres/gorm-postgres
 
 # Go workspace
 go.work
