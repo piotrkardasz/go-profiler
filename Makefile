@@ -1,4 +1,4 @@
-.PHONY: build test vet ui-build ui-dev clean help
+.PHONY: build test vet ui-build ui-dev clean help example-basic example-otel example-gorm-mysql example-gorm-postgres
 
 # Default target
 help: ## Show this help
@@ -44,3 +44,11 @@ example-basic: build ## Run the basic example
 example-otel: build ## Run the OpenTelemetry example
 	@echo "Starting OTel example server..."
 	@go run ./examples/otel/
+
+example-gorm-mysql: build ## Run the GORM MySQL example
+	@echo "Starting GORM MySQL example server..."
+	@go run ./examples/gorm-mysql/
+
+example-gorm-postgres: build ## Run the GORM PostgreSQL example
+	@echo "Starting GORM PostgreSQL example server..."
+	@go run ./examples/gorm-postgres/
