@@ -80,3 +80,14 @@ export async function purgeProfiles(maxAge: string = '24h'): Promise<{ removed: 
   })
   return response.json()
 }
+
+export async function clearAllProfiles(): Promise<{ cleared: boolean }> {
+  const response = await fetch(`${API_BASE}/profiles/all`, {
+    method: 'DELETE',
+  })
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: response.statusText }))
+    throw new Error(error.error || response.statusText)
+  }
+  return response.json()
+}

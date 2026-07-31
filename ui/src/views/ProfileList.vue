@@ -5,6 +5,9 @@
       <div class="list-actions">
         <button class="btn btn-secondary" @click="refresh">Refresh</button>
         <button class="btn btn-danger" @click="handlePurge">Purge</button>
+        <button class="btn btn-danger btn-clear-all" :disabled="clearing" @click="handleClearAll">
+          {{ clearing ? 'Clearing...' : 'Clear All' }}
+        </button>
       </div>
     </div>
 
@@ -79,11 +82,12 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { listProfiles, purgeProfiles, type ProfileSummary } from '../api'
+import { listProfiles, purgeProfiles, clearAllProfiles, type ProfileSummary } from '../api'
 
 const router = useRouter()
 const profiles = ref<ProfileSummary[]>([])
 const loading = ref(false)
+const clearing = ref(false)
 const error = ref('')
 
 const filters = reactive({
@@ -128,6 +132,19 @@ async function handlePurge() {
   if (!confirm('Purge profiles older than 24 hours?')) return
   await purgeProfiles('24h')
   loadProfiles()
+}
+
+async function handleClearAll() {
+  if (!confirm('Are you sure you want to delete all profiles? This cannot be undone.')) return
+  clearing.value = true
+  try {
+    await clearAllProfiles()
+    await loadProfiles()
+  } catch (e: unknown) {
+    error.value = e instanceof Error ? e.message : 'Failed to clear profiles'
+  } finally {
+    clearing.value = false
+  }
 }
 
 function viewProfile(id: string) {
@@ -204,6 +221,16 @@ onMounted(loadProfiles)
 .btn-danger {
   background: #dc3545;
   color: #fff;
+}
+
+.btn-danger:disabled {
+  background: #dc3545;
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btn-clear-all {
+  background: #a71d2a;
 }
 
 .filters {
