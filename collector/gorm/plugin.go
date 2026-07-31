@@ -169,7 +169,11 @@ func (p *Plugin) after(operation string) func(*gorm.DB) {
 
 // WithContext returns a new context with query tracking initialized.
 // This should be called at the start of each HTTP request (typically by the collector's middleware).
+// If query tracking is already active in the context, it returns the context unchanged.
 func WithContext(ctx context.Context) context.Context {
+	if rq := queriesFromContext(ctx); rq != nil {
+		return ctx
+	}
 	return context.WithValue(ctx, contextKey, &requestQueries{
 		queries: make([]QueryEntry, 0, 16),
 	})

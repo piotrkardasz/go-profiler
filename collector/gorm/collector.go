@@ -122,6 +122,13 @@ func (c *Collector) Collect(ctx context.Context, _ *http.Request, _ collector.Re
 // Reset clears internal state (no-op, state is per-request in context).
 func (c *Collector) Reset() {}
 
+// SetupContext implements collector.ContextSetup by initializing query tracking
+// in the request context. This allows the profiler middleware to set up context
+// once, so the same context is visible both to handlers and to CollectProfile.
+func (c *Collector) SetupContext(ctx context.Context) context.Context {
+	return WithContext(ctx)
+}
+
 // PanelMeta returns UI panel metadata for the GORM collector.
 func (c *Collector) PanelMeta() collector.PanelMeta {
 	return collector.PanelMeta{

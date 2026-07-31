@@ -96,6 +96,15 @@ func (p *Profiler) Middleware(next http.Handler) http.Handler {
 		ctx := r.Context()
 		ctx = collector.WithStartTime(ctx, startTime)
 		ctx = collector.WithMemoryStats(ctx)
+
+		// Let collectors that implement ContextSetup inject their values
+		// into the context before the handler runs.
+		for _, c := range p.Collectors() {
+			if cs, ok := c.(collector.ContextSetup); ok {
+				ctx = cs.SetupContext(ctx)
+			}
+		}
+
 		r = r.WithContext(ctx)
 
 		// Set the profiler ID header before the handler writes the response

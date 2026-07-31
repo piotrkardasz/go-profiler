@@ -75,3 +75,14 @@ type PanelProvider interface {
 	// should be displayed in the profiler UI.
 	PanelMeta() PanelMeta
 }
+
+// ContextSetup is an optional interface that collectors can implement when
+// they need to inject values into the request context before the handler runs.
+// The profiler middleware calls SetupContext during context initialization,
+// ensuring the enriched context is available both to the handler chain and
+// to CollectProfile after the handler completes.
+type ContextSetup interface {
+	// SetupContext returns a new context derived from ctx with any
+	// collector-specific values added (e.g., query tracking structures).
+	SetupContext(ctx context.Context) context.Context
+}
