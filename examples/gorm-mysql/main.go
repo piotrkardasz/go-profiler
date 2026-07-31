@@ -116,6 +116,8 @@ func main() {
 	mux.HandleFunc("/api/orders", handleOrders(db))
 	mux.HandleFunc("/api/orders/n1", handleOrdersN1(db))
 	mux.HandleFunc("/api/purchase", handlePurchase(db))
+	mux.HandleFunc("/api/multi-transaction", handleMultiTransaction(db))
+	mux.HandleFunc("/api/rollback", handleRollback(db))
 	mux.HandleFunc("/api/error", handleErrorQuery(db))
 
 	// Wrap with profiler middleware and GORM context middleware
@@ -130,11 +132,13 @@ func main() {
 	fmt.Println("Profiler UI at:     http://localhost:8080/_profiler/")
 	fmt.Println()
 	fmt.Println("Try these endpoints:")
-	fmt.Println("  GET  /api/products    - List products")
-	fmt.Println("  GET  /api/orders      - List orders (eager loaded)")
-	fmt.Println("  GET  /api/orders/n1   - Orders with N+1 problem")
-	fmt.Println("  POST /api/purchase    - Purchase in transaction")
-	fmt.Println("  GET  /api/error       - Query that produces an error")
+	fmt.Println("  GET  /api/products           - List products")
+	fmt.Println("  GET  /api/orders             - List orders (eager loaded)")
+	fmt.Println("  GET  /api/orders/n1          - Orders with N+1 problem")
+	fmt.Println("  POST /api/purchase           - Purchase in transaction")
+	fmt.Println("  POST /api/multi-transaction  - Multiple transactions example")
+	fmt.Println("  POST /api/rollback           - Transaction rollback example")
+	fmt.Println("  GET  /api/error              - Query that produces an error")
 	fmt.Println()
 
 	if err := srv.ListenAndServe(); err != nil {
@@ -186,6 +190,8 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
 <li><a href="/api/orders">/api/orders</a> - List orders (eager loaded)</li>
 <li><a href="/api/orders/n1">/api/orders/n1</a> - N+1 query problem demo</li>
 <li><form action="/api/purchase" method="POST" style="display:inline"><button type="submit">/api/purchase</button></form> - Purchase in transaction (POST)</li>
+<li><form action="/api/multi-transaction" method="POST" style="display:inline"><button type="submit">/api/multi-transaction</button></form> - Multiple transactions (POST)</li>
+<li><form action="/api/rollback" method="POST" style="display:inline"><button type="submit">/api/rollback</button></form> - Transaction rollback (POST)</li>
 <li><a href="/api/error">/api/error</a> - Error query</li>
 </ul>
 </body>
@@ -280,6 +286,118 @@ func handlePurchase(db *gorm.DB) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"status": "purchased"})
+	}
+}
+
+func handleMultiTransaction(db *gorm.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+
+		// Each transaction needs its own WithTransaction call to get a unique
+		// transaction ID in the profiler. A single WithTransaction produces one ID
+		// that would merge all queries into a single group.
+
+		// Transaction 1: Create a new product
+		var product Product
+		ctx1 := gormcollector.WithTransaction(r.Context())
+		err := db.WithContext(ctx1).Transaction(func(tx *gorm.DB) error {
+			product = Product{
+				Name:  fmt.Sprintf("MultiTx Product %d", time.Now().Unix()),
+				Price: 99.99,
+				Stock: 25,
+			}
+			return tx.Create(&product).Error
+		})
+		if err != nil {
+			http.Error(w, fmt.Sprintf("transaction 1 failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		// Transaction 2: Create an order for the product
+		var order Order
+		ctx2 := gormcollector.WithTransaction(r.Context())
+		err = db.WithContext(ctx2).Transaction(func(tx *gorm.DB) error {
+			order = Order{
+				ProductID: product.ID,
+				Quantity:  2,
+				Total:     product.Price * 2,
+			}
+			return tx.Create(&order).Error
+		})
+		if err != nil {
+			http.Error(w, fmt.Sprintf("transaction 2 failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		// Transaction 3: Decrease stock
+		ctx3 := gormcollector.WithTransaction(r.Context())
+		err = db.WithContext(ctx3).Transaction(func(tx *gorm.DB) error {
+			return tx.Model(&product).Update("stock", product.Stock-2).Error
+		})
+		if err != nil {
+			http.Error(w, fmt.Sprintf("transaction 3 failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"status":     "all transactions committed",
+			"product_id": product.ID,
+			"order_id":   order.ID,
+		})
+	}
+}
+
+func handleRollback(db *gorm.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+
+		ctx := gormcollector.WithTransaction(r.Context())
+
+		// This transaction will be rolled back intentionally
+		err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			// Step 1: Create a product
+			product := Product{
+				Name:  fmt.Sprintf("RollbackProduct-%d", time.Now().Unix()),
+				Price: 199.99,
+				Stock: 10,
+			}
+			if err := tx.Create(&product).Error; err != nil {
+				return err
+			}
+
+			// Step 2: Create an order
+			order := Order{
+				ProductID: product.ID,
+				Quantity:  5,
+				Total:     product.Price * 5,
+			}
+			if err := tx.Create(&order).Error; err != nil {
+				return err
+			}
+
+			// Step 3: Intentionally fail to trigger rollback
+			return fmt.Errorf("intentional rollback: simulating a business rule violation")
+		})
+
+		w.Header().Set("Content-Type", "application/json")
+		if err != nil {
+			w.WriteHeader(http.StatusConflict)
+			json.NewEncoder(w).Encode(map[string]string{
+				"status": "rolled back",
+				"error":  err.Error(),
+				"note":   "Check the profiler to see the transaction rollback in query details",
+			})
+			return
+		}
+
+		json.NewEncoder(w).Encode(map[string]string{"status": "committed"})
 	}
 }
 
