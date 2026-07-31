@@ -54,6 +54,13 @@ func (s *testStorage) Purge(maxAge time.Duration) (int, error) {
 	return 0, nil
 }
 
+func (s *testStorage) Clear() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.profiles = make(map[string]*Profile)
+	return nil
+}
+
 func TestMiddlewareSetsProfilerIDHeader(t *testing.T) {
 	store := newTestStorage()
 	p := New(DefaultConfig(), store)

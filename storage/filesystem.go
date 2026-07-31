@@ -235,6 +235,33 @@ func (fs *FilesystemStorage) Purge(maxAge time.Duration) (int, error) {
 	return removed, nil
 }
 
+// Clear removes all profile JSON files from the storage directory.
+// The directory itself is preserved.
+func (fs *FilesystemStorage) Clear() error {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	entries, err := os.ReadDir(fs.dir)
+	if err != nil {
+		return fmt.Errorf("profiler/storage: failed to read directory: %w", err)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		if strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+		path := filepath.Join(fs.dir, entry.Name())
+		if err := os.Remove(path); err != nil {
+			return fmt.Errorf("profiler/storage: failed to remove %q: %w", entry.Name(), err)
+		}
+	}
+
+	return nil
+}
+
 // profilePath returns the filesystem path for a profile with the given ID.
 func (fs *FilesystemStorage) profilePath(id string) string {
 	return filepath.Join(fs.dir, id+".json")

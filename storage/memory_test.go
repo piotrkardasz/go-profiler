@@ -304,3 +304,68 @@ func TestMemoryStorageDefaultMaxEntries(t *testing.T) {
 		t.Errorf("expected default max entries %d, got %d", DefaultMemoryMaxEntries, store.maxEntries)
 	}
 }
+
+
+func TestMemoryStorageClear(t *testing.T) {
+	store := NewMemoryStorage(100)
+
+	now := time.Now()
+	store.Store(newTestProfile("clear1", "GET", "/a", 200, now))
+	store.Store(newTestProfile("clear2", "POST", "/b", 201, now))
+	store.Store(newTestProfile("clear3", "GET", "/c", 404, now))
+
+	if store.Len() != 3 {
+		t.Fatalf("expected 3 profiles before clear, got %d", store.Len())
+	}
+
+	if err := store.Clear(); err != nil {
+		t.Fatalf("Clear: %v", err)
+	}
+
+	if store.Len() != 0 {
+		t.Errorf("expected 0 profiles after clear, got %d", store.Len())
+	}
+
+	// List should return empty
+	summaries, err := store.List(profiler.SearchCriteria{})
+	if err != nil {
+		t.Fatalf("List after clear: %v", err)
+	}
+	if len(summaries) != 0 {
+		t.Errorf("expected 0 summaries after clear, got %d", len(summaries))
+	}
+}
+
+func TestMemoryStorageClearEmpty(t *testing.T) {
+	store := NewMemoryStorage(100)
+
+	if err := store.Clear(); err != nil {
+		t.Fatalf("Clear on empty storage should return nil, got: %v", err)
+	}
+}
+
+func TestMemoryStorageClearThenStore(t *testing.T) {
+	store := NewMemoryStorage(100)
+
+	now := time.Now()
+	store.Store(newTestProfile("before", "GET", "/old", 200, now))
+
+	if err := store.Clear(); err != nil {
+		t.Fatalf("Clear: %v", err)
+	}
+
+	// Storage should be usable after clear
+	store.Store(newTestProfile("after", "POST", "/new", 201, now))
+
+	if store.Len() != 1 {
+		t.Errorf("expected 1 profile after clear+store, got %d", store.Len())
+	}
+
+	loaded, err := store.Load("after")
+	if err != nil {
+		t.Fatalf("Load after clear+store: %v", err)
+	}
+	if loaded.ID != "after" {
+		t.Errorf("loaded ID: got %q, want %q", loaded.ID, "after")
+	}
+}

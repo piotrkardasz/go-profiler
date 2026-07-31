@@ -60,6 +60,10 @@ type Storage interface {
 	// Purge removes profiles older than maxAge. Returns the number of profiles
 	// removed.
 	Purge(maxAge time.Duration) (int, error)
+
+	// Clear removes all stored profiles. Returns nil on success, even if
+	// there are no profiles to remove.
+	Clear() error
 }
 
 // Profile represents a single profiled HTTP request with all collected data.

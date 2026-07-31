@@ -364,3 +364,73 @@ func TestFilesystemStorageConcurrentAccess(t *testing.T) {
 		t.Errorf("expected 50 profiles, got %d", len(summaries))
 	}
 }
+
+
+func TestFilesystemStorageClear(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFilesystemStorage(dir)
+	if err != nil {
+		t.Fatalf("NewFilesystemStorage: %v", err)
+	}
+
+	now := time.Now()
+	store.Store(newTestProfile("clear1", "GET", "/a", 200, now))
+	store.Store(newTestProfile("clear2", "POST", "/b", 201, now))
+	store.Store(newTestProfile("clear3", "GET", "/c", 404, now))
+
+	// Verify profiles exist
+	summaries, _ := store.List(profiler.SearchCriteria{})
+	if len(summaries) != 3 {
+		t.Fatalf("expected 3 profiles before clear, got %d", len(summaries))
+	}
+
+	if err := store.Clear(); err != nil {
+		t.Fatalf("Clear: %v", err)
+	}
+
+	// List should return empty
+	summaries, err = store.List(profiler.SearchCriteria{})
+	if err != nil {
+		t.Fatalf("List after clear: %v", err)
+	}
+	if len(summaries) != 0 {
+		t.Errorf("expected 0 summaries after clear, got %d", len(summaries))
+	}
+}
+
+func TestFilesystemStorageClearPreservesDirectory(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFilesystemStorage(dir)
+	if err != nil {
+		t.Fatalf("NewFilesystemStorage: %v", err)
+	}
+
+	store.Store(newTestProfile("pres1", "GET", "/x", 200, time.Now()))
+
+	if err := store.Clear(); err != nil {
+		t.Fatalf("Clear: %v", err)
+	}
+
+	// Directory should still exist — store should still work
+	store.Store(newTestProfile("pres2", "GET", "/y", 200, time.Now()))
+
+	loaded, err := store.Load("pres2")
+	if err != nil {
+		t.Fatalf("Load after clear: %v", err)
+	}
+	if loaded.ID != "pres2" {
+		t.Errorf("loaded ID: got %q, want %q", loaded.ID, "pres2")
+	}
+}
+
+func TestFilesystemStorageClearEmpty(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewFilesystemStorage(dir)
+	if err != nil {
+		t.Fatalf("NewFilesystemStorage: %v", err)
+	}
+
+	if err := store.Clear(); err != nil {
+		t.Fatalf("Clear on empty storage should return nil, got: %v", err)
+	}
+}

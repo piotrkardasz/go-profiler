@@ -168,6 +168,17 @@ func (ms *MemoryStorage) Purge(maxAge time.Duration) (int, error) {
 	return removed, nil
 }
 
+// Clear removes all profiles from memory.
+func (ms *MemoryStorage) Clear() error {
+	ms.mu.Lock()
+	defer ms.mu.Unlock()
+
+	ms.profiles = make(map[string]*list.Element)
+	ms.order.Init()
+
+	return nil
+}
+
 // Len returns the current number of profiles stored.
 func (ms *MemoryStorage) Len() int {
 	ms.mu.RLock()
