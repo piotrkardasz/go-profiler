@@ -3,6 +3,7 @@ import RequestPanel from '../components/panels/RequestPanel.vue'
 import TimingPanel from '../components/panels/TimingPanel.vue'
 import MemoryPanel from '../components/panels/MemoryPanel.vue'
 import OtelPanel from '../components/panels/OtelPanel.vue'
+import GormPanel from '../components/panels/GormPanel.vue'
 
 /**
  * Register all built-in panel components.
@@ -13,4 +14,5 @@ export function initBuiltinPanels(): void {
   registerPanel('timing', TimingPanel)
   registerPanel('memory', MemoryPanel)
   registerPanel('otel', OtelPanel)
+  registerPanel('gorm', GormPanel)
 }
