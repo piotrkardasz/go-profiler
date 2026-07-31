@@ -1,8 +1,9 @@
-version: "3.8"
-
 services:
   mysql:
     image: mysql:8.0
+    command:
+      - --default-authentication-plugin=mysql_native_password
+      - --skip-ssl
     environment:
       MYSQL_ROOT_PASSWORD: root
       MYSQL_DATABASE: profiler_demo
@@ -11,10 +12,10 @@ services:
     ports:
       - "3306:3306"
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uprofiler", "-pprofiler"]
+      test: ["CMD", "mysql", "-uprofiler", "-pprofiler", "-e", "SELECT 1"]
       interval: 2s
       timeout: 5s
-      retries: 10
+      retries: 15
 
   app:
     build:

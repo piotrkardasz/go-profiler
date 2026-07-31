@@ -46,9 +46,14 @@ example-otel: build ## Run the OpenTelemetry example
 	@go run ./examples/otel/
 
 example-gorm-mysql: build ## Run the GORM MySQL example
+	@echo "Starting MySQL via Docker Compose..."
+	@cd examples/gorm-mysql && docker compose up -d --wait mysql
+	@sleep 2
 	@echo "Starting GORM MySQL example server..."
-	@go run ./examples/gorm-mysql/
+	@cd examples/gorm-mysql && go run .
 
 example-gorm-postgres: build ## Run the GORM PostgreSQL example
+	@echo "Starting PostgreSQL via Docker Compose..."
+	@cd examples/gorm-postgres && docker compose up -d --wait postgres
 	@echo "Starting GORM PostgreSQL example server..."
-	@go run ./examples/gorm-postgres/
+	@cd examples/gorm-postgres && go run .
