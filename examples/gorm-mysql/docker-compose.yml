@@ -1,0 +1,30 @@
+version: "3.8"
+
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: profiler_demo
+      MYSQL_USER: profiler
+      MYSQL_PASSWORD: profiler
+    ports:
+      - "3306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uprofiler", "-pprofiler"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build:
+      context: ../..
+      dockerfile: examples/gorm-mysql/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: "profiler:profiler@tcp(mysql:3306)/profiler_demo?charset=utf8mb4&parseTime=True&loc=Local"
+      GORM_PROFILER_BACKTRACE: "true"
+    depends_on:
+      mysql:
+        condition: service_healthy
