@@ -48,7 +48,18 @@ func main() {
 
 	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
 	if err != nil {
-		log.Fatalf("Failed to connect to database: %v", err)
+		// Retry a few times in case MySQL just started
+		for i := 0; i < 5; i++ {
+			time.Sleep(2 * time.Second)
+			log.Printf("Retrying database connection (attempt %d/5)...", i+1)
+			db, err = gorm.Open(mysql.Open(dsn), &gorm.Config{})
+			if err == nil {
+				break
+			}
+		}
+		if err != nil {
+			log.Fatalf("Failed to connect to database: %v", err)
+		}
 	}
 
 	// Auto-migrate schema
@@ -174,7 +185,7 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
 <li><a href="/api/products">/api/products</a> - List products</li>
 <li><a href="/api/orders">/api/orders</a> - List orders (eager loaded)</li>
 <li><a href="/api/orders/n1">/api/orders/n1</a> - N+1 query problem demo</li>
-<li><a href="/api/purchase">/api/purchase</a> - Purchase in transaction (POST)</li>
+<li><form action="/api/purchase" method="POST" style="display:inline"><button type="submit">/api/purchase</button></form> - Purchase in transaction (POST)</li>
 <li><a href="/api/error">/api/error</a> - Error query</li>
 </ul>
 </body>
@@ -229,8 +240,8 @@ func handleOrdersN1(db *gorm.DB) http.HandlerFunc {
 
 func handlePurchase(db *gorm.DB) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		if r.Method != http.MethodPost && r.Method != http.MethodGet {
+			http.Error(w, "GET or POST only", http.StatusMethodNotAllowed)
 			return
 		}
 
