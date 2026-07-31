@@ -105,6 +105,8 @@ func main() {
 	mux.HandleFunc("/api/posts", handlePosts(db))
 	mux.HandleFunc("/api/posts/n1", handlePostsN1(db))
 	mux.HandleFunc("/api/transaction", handleTransaction(db))
+	mux.HandleFunc("/api/multi-transaction", handleMultiTransaction(db))
+	mux.HandleFunc("/api/rollback", handleRollback(db))
 	mux.HandleFunc("/api/error", handleErrorQuery(db))
 
 	// Wrap with profiler middleware and GORM context middleware
@@ -119,12 +121,14 @@ func main() {
 	fmt.Println("Profiler UI at:     http://localhost:8080/_profiler/")
 	fmt.Println()
 	fmt.Println("Try these endpoints:")
-	fmt.Println("  GET  /api/users         - List users (simple query)")
-	fmt.Println("  POST /api/users/create  - Create a user")
-	fmt.Println("  GET  /api/posts         - List posts with eager loading")
-	fmt.Println("  GET  /api/posts/n1      - List posts with N+1 problem")
-	fmt.Println("  POST /api/transaction   - Transaction example")
-	fmt.Println("  GET  /api/error         - Query that produces an error")
+	fmt.Println("  GET  /api/users              - List users (simple query)")
+	fmt.Println("  POST /api/users/create       - Create a user")
+	fmt.Println("  GET  /api/posts              - List posts with eager loading")
+	fmt.Println("  GET  /api/posts/n1           - List posts with N+1 problem")
+	fmt.Println("  POST /api/transaction        - Transaction example")
+	fmt.Println("  POST /api/multi-transaction  - Multiple transactions example")
+	fmt.Println("  POST /api/rollback           - Transaction rollback example")
+	fmt.Println("  GET  /api/error              - Query that produces an error")
 	fmt.Println()
 
 	if err := srv.ListenAndServe(); err != nil {
@@ -173,9 +177,12 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
 <h2>Test Endpoints:</h2>
 <ul>
 <li><a href="/api/users">/api/users</a> - List users</li>
+<li><form action="/api/users/create" method="POST" style="display:inline"><button type="submit">/api/users/create</button></form> - Create a user (POST)</li>
 <li><a href="/api/posts">/api/posts</a> - List posts (eager loaded)</li>
 <li><a href="/api/posts/n1">/api/posts/n1</a> - N+1 query problem demo</li>
-<li><a href="/api/transaction">/api/transaction</a> - Transaction example (POST)</li>
+<li><form action="/api/transaction" method="POST" style="display:inline"><button type="submit">/api/transaction</button></form> - Transaction example (POST)</li>
+<li><form action="/api/multi-transaction" method="POST" style="display:inline"><button type="submit">/api/multi-transaction</button></form> - Multiple transactions (POST)</li>
+<li><form action="/api/rollback" method="POST" style="display:inline"><button type="submit">/api/rollback</button></form> - Transaction rollback (POST)</li>
 <li><a href="/api/error">/api/error</a> - Error query</li>
 </ul>
 </body>
@@ -288,6 +295,116 @@ func handleTransaction(db *gorm.DB) http.HandlerFunc {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "committed"})
+	}
+}
+
+func handleMultiTransaction(db *gorm.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+
+		// Each transaction needs its own WithTransaction call to get a unique
+		// transaction ID in the profiler. A single WithTransaction produces one ID
+		// that would merge all queries into a single group.
+
+		// Transaction 1: Create a new user
+		var user User
+		ctx1 := gormcollector.WithTransaction(r.Context())
+		err := db.WithContext(ctx1).Transaction(func(tx *gorm.DB) error {
+			user = User{
+				Name:  fmt.Sprintf("MultiTxUser-%d", time.Now().Unix()),
+				Email: fmt.Sprintf("multi-tx-%d@example.com", time.Now().UnixNano()),
+			}
+			return tx.Create(&user).Error
+		})
+		if err != nil {
+			http.Error(w, fmt.Sprintf("transaction 1 failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		// Transaction 2: Create a post for the user
+		var post Post
+		ctx2 := gormcollector.WithTransaction(r.Context())
+		err = db.WithContext(ctx2).Transaction(func(tx *gorm.DB) error {
+			post = Post{
+				Title:  fmt.Sprintf("Multi-Tx Post %d", time.Now().Unix()),
+				Body:   "Created in a separate transaction",
+				UserID: user.ID,
+			}
+			return tx.Create(&post).Error
+		})
+		if err != nil {
+			http.Error(w, fmt.Sprintf("transaction 2 failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		// Transaction 3: Update the user's name to confirm the post
+		ctx3 := gormcollector.WithTransaction(r.Context())
+		err = db.WithContext(ctx3).Transaction(func(tx *gorm.DB) error {
+			return tx.Model(&user).Update("name", user.Name+" (posted)").Error
+		})
+		if err != nil {
+			http.Error(w, fmt.Sprintf("transaction 3 failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"status":  "all transactions committed",
+			"user_id": user.ID,
+			"post_id": post.ID,
+		})
+	}
+}
+
+func handleRollback(db *gorm.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+
+		ctx := gormcollector.WithTransaction(r.Context())
+
+		// This transaction will be rolled back intentionally
+		err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			// Step 1: Create a user
+			user := User{
+				Name:  fmt.Sprintf("RollbackUser-%d", time.Now().Unix()),
+				Email: fmt.Sprintf("rollback-%d@example.com", time.Now().UnixNano()),
+			}
+			if err := tx.Create(&user).Error; err != nil {
+				return err
+			}
+
+			// Step 2: Create a post
+			post := Post{
+				Title:  "Rollback Post",
+				Body:   "This will be rolled back",
+				UserID: user.ID,
+			}
+			if err := tx.Create(&post).Error; err != nil {
+				return err
+			}
+
+			// Step 3: Intentionally fail to trigger rollback
+			return fmt.Errorf("intentional rollback: simulating a business rule violation")
+		})
+
+		w.Header().Set("Content-Type", "application/json")
+		if err != nil {
+			w.WriteHeader(http.StatusConflict)
+			json.NewEncoder(w).Encode(map[string]string{
+				"status": "rolled back",
+				"error":  err.Error(),
+				"note":   "Check the profiler to see the transaction rollback in query details",
+			})
+			return
+		}
+
 		json.NewEncoder(w).Encode(map[string]string{"status": "committed"})
 	}
 }
