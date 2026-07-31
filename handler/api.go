@@ -26,10 +26,12 @@ func NewAPIHandler(p *profiler.Profiler) *APIHandler {
 //   - GET    {prefix}/api/profiles       — list profiles
 //   - GET    {prefix}/api/profiles/{id}   — get profile by ID
 //   - DELETE {prefix}/api/profiles        — purge profiles
+//   - DELETE {prefix}/api/profiles/all    — clear all profiles
 //   - GET    {prefix}/api/collectors      — list registered collectors
 func (h *APIHandler) RegisterRoutes(mux *http.ServeMux, prefix string) {
 	prefix = strings.TrimRight(prefix, "/")
 
+	mux.HandleFunc(prefix+"/api/profiles/all", h.handleClearAll)
 	mux.HandleFunc(prefix+"/api/profiles", h.handleProfiles)
 	mux.HandleFunc(prefix+"/api/profiles/", h.handleProfileByID)
 	mux.HandleFunc(prefix+"/api/collectors", h.handleCollectors)
@@ -139,6 +141,36 @@ func (h *APIHandler) purgeProfiles(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusOK, map[string]any{
 		"removed": removed,
 		"max_age": maxAge.String(),
+	})
+}
+
+// handleClearAll handles DELETE for /api/profiles/all — removes all profiles.
+func (h *APIHandler) handleClearAll(w http.ResponseWriter, r *http.Request) {
+	h.setCORSHeaders(w)
+
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	if r.Method != http.MethodDelete {
+		h.writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	storage := h.profiler.Storage()
+	if storage == nil {
+		h.writeError(w, http.StatusServiceUnavailable, "storage not configured")
+		return
+	}
+
+	if err := storage.Clear(); err != nil {
+		h.writeError(w, http.StatusInternalServerError, "failed to clear profiles")
+		return
+	}
+
+	h.writeJSON(w, http.StatusOK, map[string]any{
+		"cleared": true,
 	})
 }
 

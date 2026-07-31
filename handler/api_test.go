@@ -75,6 +75,13 @@ func (s *mockStorage) Purge(maxAge time.Duration) (int, error) {
 	return removed, nil
 }
 
+func (s *mockStorage) Clear() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.profiles = make(map[string]*profiler.Profile)
+	return nil
+}
+
 // mockCollector for test profiler setup
 type mockCollector struct{}
 
@@ -373,5 +380,68 @@ func TestContentTypeJSON(t *testing.T) {
 	ct := rec.Header().Get("Content-Type")
 	if ct != "application/json" {
 		t.Errorf("Content-Type: got %q, want 'application/json'", ct)
+	}
+}
+
+
+func TestClearAllProfiles(t *testing.T) {
+	_, store, mux := setupTestHandler(t)
+	seedProfiles(store, 5)
+
+	req := httptest.NewRequest(http.MethodDelete, "/_profiler/api/profiles/all", nil)
+	rec := httptest.NewRecorder()
+
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status: got %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var resp map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	cleared, ok := resp["cleared"].(bool)
+	if !ok || !cleared {
+		t.Errorf("expected cleared: true, got %v", resp["cleared"])
+	}
+
+	// Verify profiles are gone
+	store.mu.RLock()
+	remaining := len(store.profiles)
+	store.mu.RUnlock()
+	if remaining != 0 {
+		t.Errorf("expected 0 profiles after clear, got %d", remaining)
+	}
+}
+
+func TestClearAllProfilesMethodNotAllowed(t *testing.T) {
+	_, _, mux := setupTestHandler(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/_profiler/api/profiles/all", nil)
+	rec := httptest.NewRecorder()
+
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status: got %d, want %d", rec.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+func TestClearAllProfilesOptions(t *testing.T) {
+	_, _, mux := setupTestHandler(t)
+
+	req := httptest.NewRequest(http.MethodOptions, "/_profiler/api/profiles/all", nil)
+	rec := httptest.NewRecorder()
+
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("OPTIONS status: got %d, want %d", rec.Code, http.StatusNoContent)
+	}
+
+	if origin := rec.Header().Get("Access-Control-Allow-Origin"); origin != "*" {
+		t.Errorf("CORS origin: got %q, want '*'", origin)
 	}
 }
