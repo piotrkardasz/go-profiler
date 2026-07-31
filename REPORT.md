@@ -82,7 +82,7 @@ Rather than wrapping database calls externally, the collector registers as a nat
 
 ### Decision: Context-Based Per-Request Query Tracking
 
-Queries are accumulated in a `requestQueries` struct stored in the request context. The collector's middleware (`gormCollector.Middleware()`) initializes this context. Users must pass `r.Context()` to GORM via `db.WithContext(r.Context())` for queries to be captured.
+Queries are accumulated in a `requestQueries` struct stored in the request context. The profiler middleware initializes this via the `collector.ContextSetup` interface — collectors that need to inject context values (like the GORM collector) implement `SetupContext(ctx)`, which the profiler calls before invoking the handler. This ensures the same context is visible both to handler code and to `CollectProfile` after the handler returns. The GORM collector's standalone `Middleware()` is retained for backward compatibility and is idempotent (it won't create a duplicate tracker if one already exists). Users must pass `r.Context()` to GORM via `db.WithContext(r.Context())` for queries to be captured.
 
 ### Decision: Named Connections
 
@@ -136,6 +136,7 @@ The GORM collector registers as `"gorm"` with panel metadata pointing to `"GormP
 | TypeScript `fractionalSecondDigits` not in type defs | Used manual millisecond formatting instead |
 | `sdktrace.WithAttributes` undefined | Corrected to `oteltrace.WithAttributes` (trace package, not SDK) |
 | Unused variable in Vue (TypeScript strict mode) | Removed `availablePanels` computed that wasn't referenced in template |
+| GORM queries not recorded in profiles | Profiler middleware's `ctx` lacked GORM's `requestQueries` because `r.WithContext()` returns a new pointer — inner middleware enrichments were invisible to outer `CollectProfile`. Fixed by adding `collector.ContextSetup` interface so the profiler sets up collector contexts before calling handlers, and making `WithContext` idempotent. |
 
 ## Verification
 
