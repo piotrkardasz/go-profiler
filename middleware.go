@@ -1,6 +1,7 @@
 package profiler
 
 import (
+	"fmt"
 	"math/rand/v2"
 	"net/http"
 	"strings"
@@ -150,6 +151,14 @@ func (p *Profiler) Middleware(next http.Handler) http.Handler {
 		p.inflight.Add(1)
 		go func() {
 			defer p.inflight.Done()
+			defer func() {
+				if rv := recover(); rv != nil {
+					p.logger.Error("panic in profile collection",
+						"profile_id", profileID,
+						"panic", fmt.Sprintf("%v", rv),
+					)
+				}
+			}()
 
 			// Collect profile data from all registered collectors
 			profile := p.CollectProfile(ctx, r, resData)
