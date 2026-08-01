@@ -332,3 +332,71 @@ This document records the decisions made during the initial conversation that sh
 | 15 | Memory stats | runtime/metrics (no STW) | Eliminates global pauses |
 | 16 | Config caching | Cache at construction + Refresh() | Zero per-request I/O |
 | 17 | Graceful shutdown | sync.WaitGroup + context timeout | No data loss on exit |
+
+
+
+---
+
+## Decision 18: Per-Request OTel Span and Metric Isolation
+
+**Question:** How to prevent cross-request contamination of OpenTelemetry spans and metrics when multiple requests are in flight?
+
+**Problem:**
+The original OTel collector used a single global buffer for spans (`SpanCapturer`) and metrics (`MetricCapturer`). `LateCollect` drained the entire buffer for whichever request called it first. With async collection in a goroutine, concurrent requests would race each other, resulting in:
+- Request A's profile containing spans from Request B (and vice versa)
+- Metrics being attributed to whichever request's `LateCollect` fired first after a periodic export tick
+- Duplicated or missing spans across profiles
+
+**Options evaluated:**
+- a. Per-request SpanProcessor instance — Create a new capturer per request, inject via context
+- b. Trace-ID-correlated shared capturer — Keep one global capturer but index spans by trace ID, drain per-trace
+- c. Keep global drain, document as limitation — Accept the behavior and label it "process-wide"
+
+**Decision:** **Trace-ID-correlated shared capturer (b) + per-request metric windowing**
+
+**Rationale:**
+- Option (a) requires users to wire a new SpanProcessor per request into the TracerProvider, which is complex, non-standard, and can't work with a fixed provider setup.
+- Option (b) keeps the existing wiring pattern (one capturer registered once as a SpanProcessor) while adding per-request isolation internally. The change is transparent to users.
+- Option (c) loses valuable per-request observability data.
+
+**Implementation:**
+
+1. **SpanCapturer redesigned:** Internal storage changed from `[]ReadOnlySpan` to `map[trace.TraceID][]ReadOnlySpan`. `OnEnd` indexes each span by its trace ID. New method `CapturedSpansForTrace(traceID)` drains only one trace's spans; `CapturedSpans()` retained for backward compatibility.
+
+2. **Collector implements `ContextSetup`:** `SetupContext(ctx)` captures the request's active trace ID from `trace.SpanContextFromContext(ctx)` and stores it in context. The profiler middleware already calls `SetupContext` on collectors that implement this interface — zero changes needed upstream.
+
+3. **LateCollect uses trace ID:** Reads the stored trace ID from context and calls `CapturedSpansForTrace(traceID)` instead of the global drain. Falls back to `CapturedSpans()` if no trace ID is present (backward compat for users not using instrumented middleware).
+
+4. **Per-request metric windowing:** `MetricCapturer` gained `StartRequestMetrics(requestID)` / `EndRequestMetrics(requestID)` methods. `SetupContext` registers the request; `LateCollect` retrieves only metrics exported during that request's lifetime. This doesn't give "request-caused metrics" (impossible with global aggregates) but does give a time-correlated window.
+
+**Trade-offs:**
+- Spans: Fully correct per-request attribution. A span belongs to exactly one trace ID, so there's no ambiguity.
+- Metrics: Still process-global by nature (OTel periodic reader exports all instruments). The windowing approach attributes metrics by time overlap, not causation. For true per-request metrics, use the profiler's built-in timing/memory collectors.
+- Memory: The `byTraceID` map grows with active traces. Cleaned up as each request's `LateCollect` runs. Long-lived uncollected traces could accumulate — acceptable for a development profiler.
+
+**Result:** Concurrent requests no longer contaminate each other's span data. Verified with race-detector-clean concurrent tests (20 simultaneous goroutines).
+
+---
+
+## Updated Decision Summary Table
+
+| # | Topic | Decision | Key Reason |
+|---|-------|----------|------------|
+| 1 | Use case | Web applications | Scoped to HTTP profiling |
+| 2 | Feature scope | X-Profiler-Id header + dedicated UI | Works for all response types |
+| 3 | Framework | Framework-agnostic (http.Handler) | Maximum compatibility |
+| 4 | Collectors | Extensible with interface | Open/closed principle |
+| 5 | Storage | Pluggable, file-based default | Flexible + zero-infra default |
+| 6 | UI | Vue 3 + JSON API | Extensible panel system |
+| 7 | Panel extensibility | Hybrid (generic + custom components) | Zero friction + optional polish |
+| 8 | Enable/disable | Environment variable | Simple, matches deployment patterns |
+| 9 | Go version | 1.21+ | slog, modern stdlib |
+| 10 | File format | JSON (one per profile) | Human-readable, no deps |
+| 11 | OTel scope | Both metrics + traces | Complete observability |
+| 12 | UI bundling | Dual mode (embed + dev proxy) | Best of both worlds |
+| 13 | Design philosophy | Symfony concepts, Go idioms | Proven architecture, native feel |
+| 14 | Collection execution | Async goroutine-per-request | ~5µs overhead vs previous ms |
+| 15 | Memory stats | runtime/metrics (no STW) | Eliminates global pauses |
+| 16 | Config caching | Cache at construction + Refresh() | Zero per-request I/O |
+| 17 | Graceful shutdown | sync.WaitGroup + context timeout | No data loss on exit |
+| 18 | OTel isolation | Trace-ID-correlated capture | No cross-request span bleed |
