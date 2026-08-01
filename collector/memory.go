@@ -3,10 +3,9 @@ package collector
 import (
 	"context"
 	"net/http"
-	"runtime"
 )
 
-// memoryStatsKey is the context key for storing pre-handler memory stats.
+// memoryStatsKey is the context key for storing pre-handler memory snapshot.
 type memoryStatsKeyType struct{}
 
 var memoryStatsKey = memoryStatsKeyType{}
@@ -45,6 +44,8 @@ type MemoryData struct {
 }
 
 // MemoryCollector captures memory statistics before and after request handling.
+// It uses the runtime/metrics package which does NOT require stop-the-world
+// pauses, unlike runtime.ReadMemStats.
 type MemoryCollector struct{}
 
 // NewMemoryCollector creates a new MemoryCollector.
@@ -59,25 +60,25 @@ func (c *MemoryCollector) Name() string {
 
 // Collect gathers memory statistics after the handler has run.
 // It compares against the pre-handler snapshot stored in the context.
+// Uses runtime/metrics (no stop-the-world) instead of runtime.ReadMemStats.
 func (c *MemoryCollector) Collect(ctx context.Context, _ *http.Request, _ ResponseData) (any, error) {
-	var afterStats runtime.MemStats
-	runtime.ReadMemStats(&afterStats)
+	afterSnap := captureMemorySnapshot()
 
 	data := &MemoryData{
-		AllocAfter:     afterStats.Alloc,
-		TotalAlloc:     afterStats.TotalAlloc,
-		HeapAlloc:      afterStats.HeapAlloc,
-		HeapInuse:      afterStats.HeapInuse,
-		HeapObjects:    afterStats.HeapObjects,
-		NumGC:          afterStats.NumGC,
-		GoroutineCount: runtime.NumGoroutine(),
-		Sys:            afterStats.Sys,
+		AllocAfter:     afterSnap.HeapObjects,
+		TotalAlloc:     afterSnap.HeapAllocs,
+		HeapAlloc:      afterSnap.HeapObjects,
+		HeapInuse:      afterSnap.HeapObjects + afterSnap.HeapUnused,
+		HeapObjects:    afterSnap.HeapObjCount,
+		NumGC:          uint32(afterSnap.GCCycles),
+		GoroutineCount: int(afterSnap.Goroutines),
+		Sys:            afterSnap.TotalMemory,
 	}
 
 	// If we have a pre-handler snapshot, compute the delta
-	if beforeStats, ok := MemoryStatsFromContext(ctx); ok {
-		data.AllocBefore = beforeStats.Alloc
-		data.AllocDelta = int64(afterStats.Alloc) - int64(beforeStats.Alloc)
+	if beforeSnap, ok := MemorySnapshotFromContext(ctx); ok {
+		data.AllocBefore = beforeSnap.HeapObjects
+		data.AllocDelta = int64(afterSnap.HeapObjects) - int64(beforeSnap.HeapObjects)
 	}
 
 	return data, nil
@@ -96,16 +97,22 @@ func (c *MemoryCollector) PanelMeta() PanelMeta {
 	}
 }
 
-// WithMemoryStats captures a memory stats snapshot and stores it in the context.
+// WithMemoryStats captures a memory snapshot and stores it in the context.
 // This should be called at the beginning of the middleware chain.
+// Uses runtime/metrics (no stop-the-world) instead of runtime.ReadMemStats.
 func WithMemoryStats(ctx context.Context) context.Context {
-	var stats runtime.MemStats
-	runtime.ReadMemStats(&stats)
-	return context.WithValue(ctx, memoryStatsKey, &stats)
+	snap := captureMemorySnapshot()
+	return context.WithValue(ctx, memoryStatsKey, &snap)
 }
 
-// MemoryStatsFromContext retrieves the pre-handler memory stats from the context.
-func MemoryStatsFromContext(ctx context.Context) (*runtime.MemStats, bool) {
-	stats, ok := ctx.Value(memoryStatsKey).(*runtime.MemStats)
-	return stats, ok
+// MemorySnapshotFromContext retrieves the pre-handler memory snapshot from the context.
+func MemorySnapshotFromContext(ctx context.Context) (*memorySnapshot, bool) {
+	snap, ok := ctx.Value(memoryStatsKey).(*memorySnapshot)
+	return snap, ok
+}
+
+// MemoryStatsFromContext is kept for backward compatibility.
+// Deprecated: Use MemorySnapshotFromContext instead.
+func MemoryStatsFromContext(ctx context.Context) (*memorySnapshot, bool) {
+	return MemorySnapshotFromContext(ctx)
 }

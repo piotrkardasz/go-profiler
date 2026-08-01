@@ -17,7 +17,7 @@ func TestMemoryCollectorName(t *testing.T) {
 func TestMemoryCollectorCollect(t *testing.T) {
 	c := NewMemoryCollector()
 
-	// Store pre-handler memory stats in context
+	// Store pre-handler memory snapshot in context
 	ctx := WithMemoryStats(context.Background())
 
 	// Simulate some allocations
@@ -36,12 +36,12 @@ func TestMemoryCollectorCollect(t *testing.T) {
 		t.Fatalf("expected *MemoryData, got %T", result)
 	}
 
-	// Basic sanity checks
+	// Basic sanity checks — values should be populated
 	if data.AllocAfter == 0 {
 		t.Error("AllocAfter is 0")
 	}
 	if data.AllocBefore == 0 {
-		t.Error("AllocBefore is 0 (pre-handler stats should have been captured)")
+		t.Error("AllocBefore is 0 (pre-handler snapshot should have been captured)")
 	}
 	if data.HeapAlloc == 0 {
 		t.Error("HeapAlloc is 0")
@@ -109,21 +109,50 @@ func TestMemoryCollectorPanelMeta(t *testing.T) {
 func TestWithMemoryStatsAndFromContext(t *testing.T) {
 	ctx := WithMemoryStats(context.Background())
 
-	stats, ok := MemoryStatsFromContext(ctx)
+	snap, ok := MemorySnapshotFromContext(ctx)
 	if !ok {
-		t.Fatal("expected memory stats in context")
+		t.Fatal("expected memory snapshot in context")
 	}
-	if stats == nil {
-		t.Fatal("stats is nil")
+	if snap == nil {
+		t.Fatal("snapshot is nil")
 	}
-	if stats.Alloc == 0 {
-		t.Error("stats.Alloc is 0")
+	if snap.HeapObjects == 0 {
+		t.Error("snap.HeapObjects is 0")
 	}
 }
 
-func TestMemoryStatsFromContextMissing(t *testing.T) {
-	_, ok := MemoryStatsFromContext(context.Background())
+func TestMemorySnapshotFromContextMissing(t *testing.T) {
+	_, ok := MemorySnapshotFromContext(context.Background())
 	if ok {
-		t.Error("expected ok=false for context without memory stats")
+		t.Error("expected ok=false for context without memory snapshot")
+	}
+}
+
+func TestCaptureMemorySnapshot(t *testing.T) {
+	snap := captureMemorySnapshot()
+
+	if snap.HeapObjects == 0 {
+		t.Error("HeapObjects is 0")
+	}
+	if snap.TotalMemory == 0 {
+		t.Error("TotalMemory is 0")
+	}
+	if snap.Goroutines == 0 {
+		t.Error("Goroutines is 0")
+	}
+	if snap.HeapAllocs == 0 {
+		t.Error("HeapAllocs is 0")
+	}
+}
+
+func TestMemoryStatsFromContextBackwardCompat(t *testing.T) {
+	// MemoryStatsFromContext should still work (deprecated but functional)
+	ctx := WithMemoryStats(context.Background())
+	snap, ok := MemoryStatsFromContext(ctx)
+	if !ok {
+		t.Fatal("expected snapshot via deprecated MemoryStatsFromContext")
+	}
+	if snap == nil {
+		t.Fatal("snapshot is nil")
 	}
 }
