@@ -116,27 +116,32 @@ func (p *Profiler) Middleware(next http.Handler) http.Handler {
 		// Execute the actual handler
 		next.ServeHTTP(wrapped, r)
 
-		// Compute duration
+		// Capture lightweight data synchronously before spawning goroutine.
+		// These must be read now because the responseWriter and connection
+		// may be reused after this middleware returns.
 		duration := time.Since(startTime)
-
-		// Build response data for collectors
+		method := r.Method
+		url := r.URL.String()
+		statusCode := wrapped.statusCode
 		resData := collector.ResponseData{
 			StatusCode: wrapped.statusCode,
-			Headers:    wrapped.Header(),
+			Headers:    wrapped.Header().Clone(),
 			Size:       wrapped.size,
 		}
 
-		// Collect profile data
-		profile := p.CollectProfile(ctx, r, resData)
-		profile.ID = profileID
-		profile.Method = r.Method
-		profile.URL = r.URL.String()
-		profile.StatusCode = wrapped.statusCode
-		profile.Timestamp = startTime
-		profile.Duration = duration
-
-		// Store profile and run late collectors asynchronously
+		// Run all collection work asynchronously to avoid adding latency
+		// to the HTTP response. CollectProfile, LateCollect, and Store all
+		// execute off the request hot path.
 		go func() {
+			// Collect profile data from all registered collectors
+			profile := p.CollectProfile(ctx, r, resData)
+			profile.ID = profileID
+			profile.Method = method
+			profile.URL = url
+			profile.StatusCode = statusCode
+			profile.Timestamp = startTime
+			profile.Duration = duration
+
 			// Run late collectors
 			lateData := p.CollectLate(ctx)
 			for name, data := range lateData {
