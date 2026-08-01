@@ -50,10 +50,10 @@ example-gorm-mysql: build ## Run the GORM MySQL example
 	@cd examples/gorm-mysql && docker compose up -d --wait mysql
 	@sleep 2
 	@echo "Starting GORM MySQL example server..."
-	@cd examples/gorm-mysql && go run .
+	@cd examples/gorm-mysql && GORM_PROFILER_BACKTRACE=1 go run .
 
 example-gorm-postgres: build ## Run the GORM PostgreSQL example
 	@echo "Starting PostgreSQL via Docker Compose..."
 	@cd examples/gorm-postgres && docker compose up -d --wait postgres
 	@echo "Starting GORM PostgreSQL example server..."
-	@cd examples/gorm-postgres && go run .
+	@cd examples/gorm-postgres && GORM_PROFILER_BACKTRACE=1 go run .
