@@ -82,6 +82,7 @@ func main() {
 	p.AddCollector(collector.NewRequestCollector())
 	p.AddCollector(collector.NewTimingCollector())
 	p.AddCollector(collector.NewMemoryCollector())
+	p.AddCollector(collector.NewConfigCollector())
 	p.AddCollector(gormCollector)
 
 	// Set up routes
