@@ -73,6 +73,12 @@ func (p *Profiler) Middleware(next http.Handler) http.Handler {
 			return
 		}
 
+		// Skip if profiler is shutting down
+		if p.IsShutdown() {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		// Skip profiler's own routes to avoid self-profiling
 		cfg := p.Config()
 		if strings.HasPrefix(r.URL.Path, cfg.RoutePrefix) {
@@ -132,7 +138,10 @@ func (p *Profiler) Middleware(next http.Handler) http.Handler {
 		// Run all collection work asynchronously to avoid adding latency
 		// to the HTTP response. CollectProfile, LateCollect, and Store all
 		// execute off the request hot path.
+		p.inflight.Add(1)
 		go func() {
+			defer p.inflight.Done()
+
 			// Collect profile data from all registered collectors
 			profile := p.CollectProfile(ctx, r, resData)
 			profile.ID = profileID

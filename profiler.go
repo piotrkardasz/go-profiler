@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/piotrkardasz/go-profiler/collector"
 )
@@ -76,6 +77,12 @@ type Profiler struct {
 	collectors []collector.Collector
 	storage    Storage
 	logger     *slog.Logger
+
+	// inflight tracks the number of active async collection goroutines.
+	inflight sync.WaitGroup
+	// shutdownFlag indicates the profiler is shutting down. New requests
+	// will skip profiling once this is set.
+	shutdownFlag atomic.Bool
 }
 
 // New creates a new Profiler with the given configuration and storage backend.
@@ -134,6 +141,32 @@ func (p *Profiler) Config() Config {
 // Storage returns the underlying storage backend.
 func (p *Profiler) Storage() Storage {
 	return p.storage
+}
+
+// IsShutdown returns whether the profiler has been shut down.
+func (p *Profiler) IsShutdown() bool {
+	return p.shutdownFlag.Load()
+}
+
+// Shutdown gracefully shuts down the profiler, waiting for all in-flight
+// async collection goroutines to complete before returning. It respects
+// the context deadline for timeout behavior. After Shutdown is called,
+// new requests will skip profiling but handlers still execute normally.
+func (p *Profiler) Shutdown(ctx context.Context) error {
+	p.shutdownFlag.Store(true)
+
+	done := make(chan struct{})
+	go func() {
+		p.inflight.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // CollectProfile runs all registered collectors against the given request and
