@@ -61,6 +61,37 @@ func (s *testStorage) Clear() error {
 	return nil
 }
 
+// waitForProfile polls the store for a profile by ID with a timeout.
+// This replaces fixed time.Sleep calls to make tests robust under load.
+func waitForProfile(t *testing.T, store *testStorage, id string, timeout time.Duration) *Profile {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		profile, err := store.Load(id)
+		if err == nil {
+			return profile
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("profile %q not found within %v", id, timeout)
+	return nil
+}
+
+// waitForProfileCount polls until the store has at least n profiles.
+func waitForProfileCount(t *testing.T, store *testStorage, n int, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		summaries, _ := store.List(SearchCriteria{})
+		if len(summaries) >= n {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	summaries, _ := store.List(SearchCriteria{})
+	t.Fatalf("expected at least %d profiles within %v, got %d", n, timeout, len(summaries))
+}
+
 func TestMiddlewareSetsProfilerIDHeader(t *testing.T) {
 	store := newTestStorage()
 	p := New(DefaultConfig(), store)
@@ -113,14 +144,8 @@ func TestMiddlewareStoresProfile(t *testing.T) {
 		t.Fatal("X-Profiler-Id header not set")
 	}
 
-	// Wait for async store
-	time.Sleep(50 * time.Millisecond)
-
-	// Load the stored profile
-	profile, err := store.Load(profilerID)
-	if err != nil {
-		t.Fatalf("failed to load profile: %v", err)
-	}
+	// Wait for async collection + storage
+	profile := waitForProfile(t, store, profilerID, 2*time.Second)
 
 	if profile.ID != profilerID {
 		t.Errorf("ID: got %q, want %q", profile.ID, profilerID)
@@ -228,12 +253,8 @@ func TestMiddlewareCapturesStatusCode(t *testing.T) {
 			}
 
 			profilerID := rec.Header().Get(HeaderProfilerID)
-			time.Sleep(30 * time.Millisecond)
+			profile := waitForProfile(t, store, profilerID, 2*time.Second)
 
-			profile, err := store.Load(profilerID)
-			if err != nil {
-				t.Fatalf("Load: %v", err)
-			}
 			if profile.StatusCode != tt.status {
 				t.Errorf("profile StatusCode: got %d, want %d", profile.StatusCode, tt.status)
 			}
@@ -255,12 +276,8 @@ func TestMiddlewareDefaultStatusCode(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	profilerID := rec.Header().Get(HeaderProfilerID)
-	time.Sleep(30 * time.Millisecond)
+	profile := waitForProfile(t, store, profilerID, 2*time.Second)
 
-	profile, err := store.Load(profilerID)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
 	if profile.StatusCode != 200 {
 		t.Errorf("expected implicit 200 status, got %d", profile.StatusCode)
 	}
