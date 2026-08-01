@@ -273,17 +273,64 @@ GO_PROFILER_UI_DEV=true go run ./examples/basic/
 make ui-dev
 ```
 
+## GORM Collector
+
+The GORM collector captures per-request SQL queries, detects N+1 patterns, slow queries, and duplicates.
+
+```go
+import (
+    gormcollector "github.com/piotrkardasz/go-profiler/collector/gorm"
+)
+
+// Create the GORM collector with options
+gc := gormcollector.NewCollector(
+    gormcollector.WithConnection("primary", db),
+    gormcollector.WithSlowThreshold(200 * time.Millisecond),
+    gormcollector.WithN1Threshold(3),
+)
+
+p.AddCollector(gc)
+```
+
+### Backtrace Collection
+
+The GORM collector can capture Go call stack traces for each query. This is opt-in because `runtime.Callers()` has measurable overhead.
+
+Enable it via the `GORM_PROFILER_BACKTRACE` environment variable:
+
+```bash
+GORM_PROFILER_BACKTRACE=1 go run .
+```
+
+Or programmatically:
+
+```go
+gc := gormcollector.NewCollector(
+    gormcollector.WithConnection("primary", db),
+    gormcollector.WithBacktrace(true),
+)
+```
+
+**Precedence:**
+1. Explicit `WithBacktrace(bool)` — highest priority
+2. `GORM_PROFILER_BACKTRACE` env variable (set to `"true"` or `"1"` to enable)
+3. Default: disabled
+
+The Make targets `example-gorm-mysql` and `example-gorm-postgres` enable backtrace automatically.
+
 ## Make Targets
 
 ```
-make build       # Build UI + Go package
-make test        # Run all Go tests
-make vet         # Run go vet
-make ui-build    # Build Vue UI for production
-make ui-dev      # Start Vue UI dev server
-make clean       # Clean build artifacts
-make example-basic  # Run basic example
-make example-otel   # Run OTel example
+make build              # Build UI + Go package
+make test               # Run all Go tests
+make vet                # Run go vet
+make ui-build           # Build Vue UI for production
+make ui-dev             # Start Vue UI dev server
+make clean              # Clean build artifacts
+make example-basic      # Run basic example
+make example-otel       # Run OTel example
+make example-gorm-mysql    # Run GORM MySQL example (backtrace enabled)
+make example-gorm-postgres # Run GORM PostgreSQL example (backtrace enabled)
 ```
 
 ## Project Structure
