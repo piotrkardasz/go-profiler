@@ -6,6 +6,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"log/slog"
 	"math/rand"
 	"net/http"
 	"time"
@@ -35,6 +36,14 @@ func main() {
 		// Only show env vars with APP_ or DB_ prefix (optional, remove for all vars)
 		// collector.WithEnvPrefix("APP_", "DB_"),
 	))
+
+	// Register logger collector — captures slog and log output per request
+	loggerCollector := collector.NewLoggerCollector(
+		// collector.WithMinLevel(collector.LevelInfo),  // Only capture INFO and above
+		// collector.WithMaxEntries(500),                // Limit entries per request
+	)
+	defer loggerCollector.Close() // Flush pending logs and restore original loggers on shutdown
+	p.AddCollector(loggerCollector)
 
 	// Set up HTTP mux
 	mux := http.NewServeMux()
@@ -107,22 +116,29 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleUsers(w http.ResponseWriter, r *http.Request) {
+	slog.InfoContext(r.Context(), "handling users request", "method", r.Method)
+
 	// Simulate some work
 	time.Sleep(time.Duration(10+rand.Intn(40)) * time.Millisecond)
 
+	slog.InfoContext(r.Context(), "returning user list", "count", 2)
 	w.Header().Set("Content-Type", "application/json")
 	fmt.Fprint(w, `{"users": [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]}`)
 }
 
 func handleSlow(w http.ResponseWriter, r *http.Request) {
+	slog.WarnContext(r.Context(), "starting slow operation", "threshold_ms", 200)
+
 	// Simulate a slow operation
 	time.Sleep(time.Duration(200+rand.Intn(300)) * time.Millisecond)
 
+	slog.InfoContext(r.Context(), "slow operation completed")
 	w.Header().Set("Content-Type", "application/json")
 	fmt.Fprint(w, `{"message": "This was a slow request", "delay_ms": 200}`)
 }
 
 func handleError(w http.ResponseWriter, r *http.Request) {
+	slog.ErrorContext(r.Context(), "something went wrong", "endpoint", "/api/error")
 	time.Sleep(5 * time.Millisecond)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusInternalServerError)
