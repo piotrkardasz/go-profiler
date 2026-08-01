@@ -18,8 +18,17 @@ import (
 	"github.com/piotrkardasz/go-profiler/storage"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	oteltrace "go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel/metric"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	oteltrace "go.opentelemetry.io/otel/trace"
+)
+
+// Example metrics instruments (package-level for use in handlers).
+var (
+	requestCounter  metric.Int64Counter
+	requestDuration metric.Float64Histogram
+	activeRequests  metric.Int64UpDownCounter
 )
 
 func main() {
@@ -39,15 +48,53 @@ func main() {
 	defer tp.Shutdown(context.Background())
 	otel.SetTracerProvider(tp)
 
+	// Set up OpenTelemetry metric capturer
+	metricCapturer := otelcollector.NewMetricCapturer(nil)
+
+	// Create MeterProvider with a periodic reader that exports to our capturer
+	reader := sdkmetric.NewPeriodicReader(metricCapturer,
+		sdkmetric.WithInterval(1*time.Second),
+	)
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	defer mp.Shutdown(context.Background())
+	otel.SetMeterProvider(mp)
+
+	// Create example metric instruments
+	meter := otel.Meter("example-app")
+
+	requestCounter, err = meter.Int64Counter("http.server.request_count",
+		metric.WithDescription("Total number of HTTP requests received"),
+		metric.WithUnit("{request}"),
+	)
+	if err != nil {
+		log.Fatalf("Failed to create request counter: %v", err)
+	}
+
+	requestDuration, err = meter.Float64Histogram("http.server.duration",
+		metric.WithDescription("Duration of HTTP request handling"),
+		metric.WithUnit("ms"),
+	)
+	if err != nil {
+		log.Fatalf("Failed to create request duration histogram: %v", err)
+	}
+
+	activeRequests, err = meter.Int64UpDownCounter("http.server.active_requests",
+		metric.WithDescription("Number of in-flight HTTP requests"),
+		metric.WithUnit("{request}"),
+	)
+	if err != nil {
+		log.Fatalf("Failed to create active requests gauge: %v", err)
+	}
+
 	// Create profiler
 	cfg := profiler.DefaultConfig()
 	p := profiler.New(cfg, store)
 
-	// Register collectors (including OTel)
+	// Register collectors (including OTel with both span and metric capturers)
 	p.AddCollector(collector.NewRequestCollector())
 	p.AddCollector(collector.NewTimingCollector())
 	p.AddCollector(collector.NewMemoryCollector())
-	p.AddCollector(otelcollector.NewCollector(spanCapturer, nil))
+	p.AddCollector(otelcollector.NewCollector(spanCapturer, metricCapturer))
 
 	// Set up HTTP mux
 	mux := http.NewServeMux()
@@ -80,11 +127,11 @@ func main() {
 	fmt.Println("Server running at:  http://localhost:8080")
 	fmt.Println("Profiler UI at:     http://localhost:8080/_profiler/")
 	fmt.Println()
-	fmt.Println("Try these endpoints (they create OTel spans):")
+	fmt.Println("Try these endpoints (they create OTel spans and metrics):")
 	fmt.Println("  GET  http://localhost:8080/api/orders")
 	fmt.Println("  POST http://localhost:8080/api/checkout")
 	fmt.Println()
-	fmt.Println("View the 'OpenTelemetry' tab in the profiler to see spans.")
+	fmt.Println("View the 'OpenTelemetry' tab in the profiler to see spans and metrics.")
 	fmt.Println()
 
 	if err := srv.ListenAndServe(); err != nil {
@@ -117,6 +164,23 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
 func handleOrders(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	tracer := otel.Tracer("example-app")
+	start := time.Now()
+
+	// Record active request metric
+	activeRequests.Add(ctx, 1, metric.WithAttributes(
+		attribute.String("http.route", "/api/orders"),
+	))
+	defer func() {
+		activeRequests.Add(ctx, -1, metric.WithAttributes(
+			attribute.String("http.route", "/api/orders"),
+		))
+	}()
+
+	// Increment request counter
+	requestCounter.Add(ctx, 1, metric.WithAttributes(
+		attribute.String("http.method", r.Method),
+		attribute.String("http.route", "/api/orders"),
+	))
 
 	// Simulate database query
 	ctx, dbSpan := tracer.Start(ctx, "db.query",
@@ -137,6 +201,14 @@ func handleOrders(w http.ResponseWriter, r *http.Request) {
 	time.Sleep(time.Duration(2+rand.Intn(5)) * time.Millisecond)
 	serSpan.End()
 
+	// Record request duration
+	duration := float64(time.Since(start).Milliseconds())
+	requestDuration.Record(ctx, duration, metric.WithAttributes(
+		attribute.String("http.method", r.Method),
+		attribute.String("http.route", "/api/orders"),
+		attribute.Int("http.status_code", 200),
+	))
+
 	w.Header().Set("Content-Type", "application/json")
 	fmt.Fprint(w, `{"orders": [{"id": 1, "total": 99.99}, {"id": 2, "total": 149.50}]}`)
 }
@@ -144,6 +216,23 @@ func handleOrders(w http.ResponseWriter, r *http.Request) {
 func handleCheckout(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	tracer := otel.Tracer("example-app")
+	start := time.Now()
+
+	// Record active request metric
+	activeRequests.Add(ctx, 1, metric.WithAttributes(
+		attribute.String("http.route", "/api/checkout"),
+	))
+	defer func() {
+		activeRequests.Add(ctx, -1, metric.WithAttributes(
+			attribute.String("http.route", "/api/checkout"),
+		))
+	}()
+
+	// Increment request counter
+	requestCounter.Add(ctx, 1, metric.WithAttributes(
+		attribute.String("http.method", r.Method),
+		attribute.String("http.route", "/api/checkout"),
+	))
 
 	// Validate cart
 	ctx, validateSpan := tracer.Start(ctx, "checkout.validate",
@@ -173,6 +262,14 @@ func handleCheckout(w http.ResponseWriter, r *http.Request) {
 	)
 	time.Sleep(time.Duration(10+rand.Intn(20)) * time.Millisecond)
 	inventorySpan.End()
+
+	// Record request duration
+	duration := float64(time.Since(start).Milliseconds())
+	requestDuration.Record(ctx, duration, metric.WithAttributes(
+		attribute.String("http.method", r.Method),
+		attribute.String("http.route", "/api/checkout"),
+		attribute.Int("http.status_code", 201),
+	))
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
