@@ -156,3 +156,62 @@ func TestMemoryStatsFromContextBackwardCompat(t *testing.T) {
 		t.Fatal("snapshot is nil")
 	}
 }
+
+
+func TestMemoryCollectorReset(t *testing.T) {
+	c := NewMemoryCollector()
+	// Reset should not panic (it's a no-op)
+	c.Reset()
+}
+
+func TestMemoryCollectorDelta(t *testing.T) {
+	c := NewMemoryCollector()
+
+	// Capture "before" snapshot
+	ctx := WithMemoryStats(context.Background())
+
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	res := ResponseData{StatusCode: 200}
+
+	result, err := c.Collect(ctx, req, res)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	data := result.(*MemoryData)
+
+	// AllocDelta should be non-zero (the test process allocates between snapshots)
+	// It could be positive or negative depending on GC, but AllocBefore and AllocAfter
+	// should both be non-zero when context has a before snapshot
+	if data.AllocBefore == 0 {
+		t.Error("AllocBefore should be non-zero with context snapshot")
+	}
+	if data.AllocAfter == 0 {
+		t.Error("AllocAfter should be non-zero")
+	}
+	// Delta should equal After - Before
+	expectedDelta := int64(data.AllocAfter) - int64(data.AllocBefore)
+	if data.AllocDelta != expectedDelta {
+		t.Errorf("AllocDelta: got %d, expected %d (After-Before)", data.AllocDelta, expectedDelta)
+	}
+}
+
+func TestMemoryCollectorImplementsInterfaces(t *testing.T) {
+	var _ Collector = (*MemoryCollector)(nil)
+	var _ PanelProvider = (*MemoryCollector)(nil)
+}
+
+func TestCaptureMemorySnapshotConsistency(t *testing.T) {
+	// Two snapshots taken in sequence should have non-decreasing cumulative values
+	snap1 := captureMemorySnapshot()
+	snap2 := captureMemorySnapshot()
+
+	// HeapAllocs is cumulative — should never decrease
+	if snap2.HeapAllocs < snap1.HeapAllocs {
+		t.Errorf("HeapAllocs decreased: %d -> %d", snap1.HeapAllocs, snap2.HeapAllocs)
+	}
+	// GCCycles is cumulative — should never decrease
+	if snap2.GCCycles < snap1.GCCycles {
+		t.Errorf("GCCycles decreased: %d -> %d", snap1.GCCycles, snap2.GCCycles)
+	}
+}
