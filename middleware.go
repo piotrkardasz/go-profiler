@@ -1,6 +1,7 @@
 package profiler
 
 import (
+	"math/rand/v2"
 	"net/http"
 	"strings"
 	"time"
@@ -82,6 +83,14 @@ func (p *Profiler) Middleware(next http.Handler) http.Handler {
 		// Skip profiler's own routes to avoid self-profiling
 		cfg := p.Config()
 		if strings.HasPrefix(r.URL.Path, cfg.RoutePrefix) {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Probabilistic sampling: skip profiling if this request is not sampled.
+		// This check happens before any expensive work (ID generation, memory
+		// snapshots, context setup) so skipped requests have near-zero overhead.
+		if cfg.SampleRate < 1.0 && rand.Float64() >= cfg.SampleRate {
 			next.ServeHTTP(w, r)
 			return
 		}

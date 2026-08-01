@@ -43,6 +43,12 @@ type Config struct {
 	// UIDevServerURL is the URL of the Vite dev server when UIDevMode is true.
 	// Defaults to "http://localhost:5173".
 	UIDevServerURL string
+
+	// SampleRate controls what fraction of requests are profiled (0.0 to 1.0).
+	// 1.0 (default) means profile all requests. 0.1 means profile ~10%.
+	// Set to < 1.0 for production use to reduce overhead.
+	// Skipped requests have zero profiler overhead beyond a single float comparison.
+	SampleRate float64
 }
 
 // DefaultConfig returns a Config with sensible defaults for development.
@@ -66,6 +72,7 @@ func DefaultConfig() Config {
 		Logger:         slog.Default(),
 		UIDevMode:      uiDevMode,
 		UIDevServerURL: "http://localhost:5173",
+		SampleRate:     1.0,
 	}
 }
 
