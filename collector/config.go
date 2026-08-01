@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"runtime/debug"
 	"strings"
+	"sync"
 )
 
 const (
@@ -117,11 +118,18 @@ func WithoutBuildInfo() ConfigOption {
 // It uses the ConfigReader interface to support pluggable config sources.
 // Built-in readers handle .env files and OS environment variables without
 // any external dependencies.
+//
+// Config sources are cached at construction time to avoid per-request file I/O.
+// Call Refresh() to re-read all sources if configuration changes at runtime.
 type ConfigCollector struct {
 	// Cached at construction (immutable during process lifetime)
 	runtimeInfo  RuntimeInfo
 	buildInfo    BuildInfo
 	dependencies []DependencyInfo
+
+	// Cached config sources (refreshable)
+	cacheMu       sync.RWMutex
+	cachedSources []ConfigSource
 
 	// Configuration
 	readers           []ConfigReader
@@ -164,6 +172,10 @@ func NewConfigCollector(opts ...ConfigOption) *ConfigCollector {
 		c.buildInfo, c.dependencies = collectBuildInfo()
 	}
 
+	// Cache config sources at construction to avoid per-request file I/O.
+	// Call Refresh() to re-read if environment changes at runtime.
+	c.cachedSources = c.readAllSources()
+
 	return c
 }
 
@@ -173,16 +185,41 @@ func (c *ConfigCollector) Name() string {
 }
 
 // Collect gathers configuration data for the current request.
-// Runtime and build info are cached; readers are executed fresh per request.
+// Runtime, build info, and config sources are all cached — this method
+// performs no file I/O or environment scanning.
 func (c *ConfigCollector) Collect(_ context.Context, _ *http.Request, _ ResponseData) (any, error) {
+	c.cacheMu.RLock()
+	sources := c.cachedSources
+	c.cacheMu.RUnlock()
+
 	data := &ConfigData{
 		Runtime:      c.runtimeInfo,
 		Build:        c.buildInfo,
 		Dependencies: c.dependencies,
+		Sources:      sources,
 		MaskEnabled:  c.maskEnabled,
 	}
 
-	// Execute each reader and collect sources
+	return data, nil
+}
+
+// Reset clears internal state between requests (no-op for this collector).
+func (c *ConfigCollector) Reset() {}
+
+// Refresh re-reads all config sources and updates the cached data.
+// Call this if environment variables or .env files change at runtime.
+func (c *ConfigCollector) Refresh() {
+	sources := c.readAllSources()
+	c.cacheMu.Lock()
+	c.cachedSources = sources
+	c.cacheMu.Unlock()
+}
+
+// readAllSources executes all registered readers, applies masking, and
+// returns the assembled config sources slice.
+func (c *ConfigCollector) readAllSources() []ConfigSource {
+	var sources []ConfigSource
+
 	for _, reader := range c.readers {
 		entries, err := reader.Read()
 		if err != nil {
@@ -202,17 +239,14 @@ func (c *ConfigCollector) Collect(_ context.Context, _ *http.Request, _ Response
 			}
 		}
 
-		data.Sources = append(data.Sources, ConfigSource{
+		sources = append(sources, ConfigSource{
 			Name:    sourceName,
 			Entries: entries,
 		})
 	}
 
-	return data, nil
+	return sources
 }
-
-// Reset clears internal state between requests (no-op for this collector).
-func (c *ConfigCollector) Reset() {}
 
 // PanelMeta returns UI panel metadata for this collector.
 func (c *ConfigCollector) PanelMeta() PanelMeta {
