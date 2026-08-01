@@ -24,18 +24,41 @@ type MetricInfo struct {
 // MetricCapturer implements sdkmetric.Exporter to intercept metric exports.
 // It captures metric data for the profiler before optionally forwarding to
 // a downstream exporter.
+//
+// Metrics are process-global by nature (they aggregate across all requests in
+// each export cycle). The capturer supports two modes:
+//   - Per-request snapshot: each request gets the metrics exported between its
+//     start and completion (registered via StartRequestMetrics/EndRequestMetrics).
+//   - Global drain (backward compat): CapturedMetrics() returns everything.
 type MetricCapturer struct {
 	mu         sync.Mutex
 	metrics    []MetricInfo
 	downstream sdkmetric.Exporter
+
+	// Per-request metric tracking.
+	// requestMetrics stores a snapshot index for each active request.
+	// When a request starts, we record the current length; when it ends,
+	// we copy metrics that arrived between start and end.
+	requestMu      sync.Mutex
+	requestMetrics map[string]*requestMetricState
+}
+
+// requestMetricState tracks metrics for a single request.
+type requestMetricState struct {
+	// startIdx is the index into the capturer's metrics slice at request start.
+	startIdx int
+	// captured holds the metrics snapshot for this request after end.
+	captured []MetricInfo
+	done     bool
 }
 
 // NewMetricCapturer creates a metric capturer. The optional downstream exporter
 // receives metrics after capture (pass nil to only capture without forwarding).
 func NewMetricCapturer(downstream sdkmetric.Exporter) *MetricCapturer {
 	return &MetricCapturer{
-		metrics:    make([]MetricInfo, 0),
-		downstream: downstream,
+		metrics:        make([]MetricInfo, 0),
+		downstream:     downstream,
+		requestMetrics: make(map[string]*requestMetricState),
 	}
 }
 
@@ -54,6 +77,45 @@ func (mc *MetricCapturer) Export(ctx context.Context, rm *metricdata.ResourceMet
 		return mc.downstream.Export(ctx, rm)
 	}
 	return nil
+}
+
+// StartRequestMetrics registers a request (by ID) to track metrics that arrive
+// during its lifetime. Call this at request start.
+func (mc *MetricCapturer) StartRequestMetrics(requestID string) {
+	mc.mu.Lock()
+	startIdx := len(mc.metrics)
+	mc.mu.Unlock()
+
+	mc.requestMu.Lock()
+	mc.requestMetrics[requestID] = &requestMetricState{startIdx: startIdx}
+	mc.requestMu.Unlock()
+}
+
+// EndRequestMetrics captures metrics that arrived since StartRequestMetrics
+// was called for this request ID, and returns them. The request state is
+// cleaned up. If no metrics arrived, returns an empty slice.
+func (mc *MetricCapturer) EndRequestMetrics(requestID string) []MetricInfo {
+	mc.requestMu.Lock()
+	state, ok := mc.requestMetrics[requestID]
+	if !ok {
+		mc.requestMu.Unlock()
+		return nil
+	}
+	delete(mc.requestMetrics, requestID)
+	mc.requestMu.Unlock()
+
+	mc.mu.Lock()
+	defer mc.mu.Unlock()
+
+	if state.startIdx >= len(mc.metrics) {
+		return []MetricInfo{}
+	}
+
+	// Copy the slice of metrics that arrived during this request's lifetime.
+	window := mc.metrics[state.startIdx:]
+	result := make([]MetricInfo, len(window))
+	copy(result, window)
+	return result
 }
 
 // Temporality returns the temporality for the given instrument kind.
@@ -89,6 +151,8 @@ func (mc *MetricCapturer) Shutdown(ctx context.Context) error {
 }
 
 // CapturedMetrics returns the captured metrics and resets the internal buffer.
+// This is the backward-compatible global drain. Prefer EndRequestMetrics for
+// per-request isolation.
 func (mc *MetricCapturer) CapturedMetrics() []MetricInfo {
 	mc.mu.Lock()
 	defer mc.mu.Unlock()

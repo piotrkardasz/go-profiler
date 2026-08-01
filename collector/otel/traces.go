@@ -43,28 +43,39 @@ type OtelData struct {
 	Metrics []MetricInfo `json:"metrics"`
 }
 
-// SpanCapturer is a SpanProcessor that captures completed spans
-// associated with a specific trace. It implements sdktrace.SpanProcessor.
+// SpanCapturer is a SpanProcessor that captures completed spans keyed by
+// their trace ID, enabling per-request span retrieval. It implements
+// sdktrace.SpanProcessor.
 type SpanCapturer struct {
-	mu    sync.Mutex
-	spans []sdktrace.ReadOnlySpan
+	mu sync.Mutex
+	// spans keyed by trace ID for per-request isolation.
+	// Each trace ID maps to the list of spans belonging to that trace.
+	byTraceID map[trace.TraceID][]sdktrace.ReadOnlySpan
+	// orphans holds spans that arrive without a registered trace ID.
+	// This allows backward-compatible CapturedSpans() to still work.
+	orphans []sdktrace.ReadOnlySpan
 }
 
 // NewSpanCapturer creates a new span capturer.
 func NewSpanCapturer() *SpanCapturer {
 	return &SpanCapturer{
-		spans: make([]sdktrace.ReadOnlySpan, 0),
+		byTraceID: make(map[trace.TraceID][]sdktrace.ReadOnlySpan),
+		orphans:   make([]sdktrace.ReadOnlySpan, 0),
 	}
 }
 
 // OnStart is called when a span starts (no-op for capture purposes).
 func (sc *SpanCapturer) OnStart(_ context.Context, _ sdktrace.ReadWriteSpan) {}
 
-// OnEnd captures the completed span.
+// OnEnd captures the completed span, indexed by its trace ID.
 func (sc *SpanCapturer) OnEnd(s sdktrace.ReadOnlySpan) {
+	traceID := s.SpanContext().TraceID()
+
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
-	sc.spans = append(sc.spans, s)
+
+	// Always store by trace ID for correlation lookup
+	sc.byTraceID[traceID] = append(sc.byTraceID[traceID], s)
 }
 
 // Shutdown is called when the processor is shut down.
@@ -73,12 +84,33 @@ func (sc *SpanCapturer) Shutdown(_ context.Context) error { return nil }
 // ForceFlush is called to flush pending spans.
 func (sc *SpanCapturer) ForceFlush(_ context.Context) error { return nil }
 
-// CapturedSpans returns the captured spans and resets the internal buffer.
+// CapturedSpans returns ALL captured spans (across all trace IDs) and resets
+// the internal buffer. This preserves backward compatibility for users who
+// don't use per-request isolation.
 func (sc *SpanCapturer) CapturedSpans() []sdktrace.ReadOnlySpan {
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
-	spans := sc.spans
-	sc.spans = make([]sdktrace.ReadOnlySpan, 0)
+
+	var all []sdktrace.ReadOnlySpan
+	for _, spans := range sc.byTraceID {
+		all = append(all, spans...)
+	}
+	all = append(all, sc.orphans...)
+
+	sc.byTraceID = make(map[trace.TraceID][]sdktrace.ReadOnlySpan)
+	sc.orphans = make([]sdktrace.ReadOnlySpan, 0)
+	return all
+}
+
+// CapturedSpansForTrace returns only spans belonging to the given trace ID
+// and removes them from the buffer. Other traces' spans remain untouched.
+// This is the key method for per-request isolation.
+func (sc *SpanCapturer) CapturedSpansForTrace(traceID trace.TraceID) []sdktrace.ReadOnlySpan {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+
+	spans := sc.byTraceID[traceID]
+	delete(sc.byTraceID, traceID)
 	return spans
 }
 
@@ -96,6 +128,28 @@ func WithSpanCapturer(ctx context.Context, sc *SpanCapturer) context.Context {
 func SpanCapturerFromContext(ctx context.Context) (*SpanCapturer, bool) {
 	sc, ok := ctx.Value(tracesContextKey).(*SpanCapturer)
 	return sc, ok
+}
+
+// otelContextKeyType is used to store the request's trace ID in context
+// for per-request correlation during LateCollect.
+type otelContextKeyType struct{}
+
+var otelContextKey = otelContextKeyType{}
+
+// otelRequestContext holds per-request OTel state set during SetupContext.
+type otelRequestContext struct {
+	traceID trace.TraceID
+}
+
+// withOtelRequestContext stores OTel request context.
+func withOtelRequestContext(ctx context.Context, rc *otelRequestContext) context.Context {
+	return context.WithValue(ctx, otelContextKey, rc)
+}
+
+// otelRequestContextFromContext retrieves OTel request context.
+func otelRequestContextFromContext(ctx context.Context) (*otelRequestContext, bool) {
+	rc, ok := ctx.Value(otelContextKey).(*otelRequestContext)
+	return rc, ok
 }
 
 // TracesCollector captures OpenTelemetry spans associated with a request.
@@ -134,9 +188,17 @@ func (c *TracesCollector) Collect(ctx context.Context, _ *http.Request, _ collec
 	}, nil
 }
 
-// LateCollect captures all spans that completed during the request.
-func (c *TracesCollector) LateCollect(_ context.Context) (any, error) {
-	rawSpans := c.capturer.CapturedSpans()
+// LateCollect captures only spans belonging to the current request's trace.
+func (c *TracesCollector) LateCollect(ctx context.Context) (any, error) {
+	var rawSpans []sdktrace.ReadOnlySpan
+
+	// Try per-request isolation via context
+	if rc, ok := otelRequestContextFromContext(ctx); ok && rc.traceID.IsValid() {
+		rawSpans = c.capturer.CapturedSpansForTrace(rc.traceID)
+	} else {
+		// Fallback: drain all (backward compat for users not using SetupContext)
+		rawSpans = c.capturer.CapturedSpans()
+	}
 
 	spans := make([]SpanInfo, 0, len(rawSpans))
 	for _, s := range rawSpans {

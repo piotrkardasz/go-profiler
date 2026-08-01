@@ -5,12 +5,21 @@ import (
 	"net/http"
 
 	"github.com/piotrkardasz/go-profiler/collector"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
 )
 
 // Collector is the combined OpenTelemetry collector that captures both
 // traces and metrics for each profiled request. It implements LateCollector
-// because span data may not be available until after the response is sent.
+// and ContextSetup for per-request span/metric isolation.
+//
+// Per-request isolation works as follows:
+//   - SetupContext captures the request's trace ID from the active span context
+//     and registers it for metric tracking.
+//   - LateCollect uses the trace ID to drain only spans belonging to this request,
+//     preventing cross-request bleed when multiple requests are in flight.
+//   - Metrics are windowed per-request (metrics exported between request start
+//     and LateCollect are attributed to the request).
 type Collector struct {
 	spanCapturer   *SpanCapturer
 	metricCapturer *MetricCapturer
@@ -29,6 +38,24 @@ func NewCollector(spanCapturer *SpanCapturer, metricCapturer *MetricCapturer) *C
 // Name returns the collector identifier.
 func (c *Collector) Name() string {
 	return "otel"
+}
+
+// SetupContext implements collector.ContextSetup. It captures the current
+// request's trace ID from the span context and stores it for LateCollect
+// to use for per-request span filtering. It also starts metric tracking
+// for this request.
+func (c *Collector) SetupContext(ctx context.Context) context.Context {
+	spanCtx := trace.SpanContextFromContext(ctx)
+	rc := &otelRequestContext{
+		traceID: spanCtx.TraceID(),
+	}
+
+	// Start per-request metric tracking using trace ID as request key
+	if c.metricCapturer != nil && spanCtx.TraceID().IsValid() {
+		c.metricCapturer.StartRequestMetrics(spanCtx.TraceID().String())
+	}
+
+	return withOtelRequestContext(ctx, rc)
 }
 
 // Collect captures initial OTel context (trace/span IDs) from the request.
@@ -52,16 +79,32 @@ func (c *Collector) Collect(ctx context.Context, _ *http.Request, _ collector.Re
 	return data, nil
 }
 
-// LateCollect captures all spans and metrics that were recorded during the request.
-func (c *Collector) LateCollect(_ context.Context) (any, error) {
+// LateCollect captures spans and metrics for the current request only.
+// It uses the trace ID stored in context by SetupContext to filter spans,
+// and retrieves only the metrics that were exported during this request's
+// lifetime.
+func (c *Collector) LateCollect(ctx context.Context) (any, error) {
 	data := &OtelData{
 		Spans:   []SpanInfo{},
 		Metrics: []MetricInfo{},
 	}
 
-	// Collect spans
+	// Determine trace ID for per-request filtering
+	var requestTraceID trace.TraceID
+	if rc, ok := otelRequestContextFromContext(ctx); ok {
+		requestTraceID = rc.traceID
+	}
+
+	// Collect spans — per-request if trace ID is available, global drain otherwise
 	if c.spanCapturer != nil {
-		rawSpans := c.spanCapturer.CapturedSpans()
+		var rawSpans []sdktrace.ReadOnlySpan
+		if requestTraceID.IsValid() {
+			rawSpans = c.spanCapturer.CapturedSpansForTrace(requestTraceID)
+		} else {
+			// Fallback: drain all (backward compat)
+			rawSpans = c.spanCapturer.CapturedSpans()
+		}
+
 		for _, s := range rawSpans {
 			info := SpanInfo{
 				Name:       s.Name(),
@@ -105,9 +148,16 @@ func (c *Collector) LateCollect(_ context.Context) (any, error) {
 		}
 	}
 
-	// Collect metrics
+	// Collect metrics — per-request window if tracking was started, global otherwise
 	if c.metricCapturer != nil {
-		data.Metrics = c.metricCapturer.CapturedMetrics()
+		if requestTraceID.IsValid() {
+			data.Metrics = c.metricCapturer.EndRequestMetrics(requestTraceID.String())
+			if data.Metrics == nil {
+				data.Metrics = []MetricInfo{}
+			}
+		} else {
+			data.Metrics = c.metricCapturer.CapturedMetrics()
+		}
 	}
 
 	return data, nil
