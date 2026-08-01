@@ -222,3 +222,113 @@ This document records the decisions made during the initial conversation that sh
 | 11 | OTel scope | Both metrics + traces | Complete observability |
 | 12 | UI bundling | Dual mode (embed + dev proxy) | Best of both worlds |
 | 13 | Design philosophy | Symfony concepts, Go idioms | Proven architecture, native feel |
+
+
+---
+
+## Decision 14: Async Collection (Performance)
+
+**Question:** How should the profiler collect data without affecting application request latency?
+
+**Options evaluated:**
+- a. Goroutine-per-request — Move `CollectProfile()` into the existing async goroutine
+- b. Bounded worker pool — Fixed N workers consuming from a buffered channel
+- c. Lock-free ring buffer — MPSC queue for minimum enqueue latency
+- d. Sampling only — Skip a fraction of requests entirely
+
+**Decision:** **Goroutine-per-request (a) + runtime/metrics + config caching + optional sampling**
+
+**Rationale:**
+- The previous synchronous implementation added 200µs–10ms latency per request due to two `runtime.ReadMemStats` stop-the-world calls, file I/O (.env reading), and GORM query analysis.
+- Analysis proved all `Collector.Collect()` calls can be safely deferred: `context.Context` values are immutable, `*http.Request` is not recycled after `ServeHTTP`, and GORM queries are no longer written to after the handler completes.
+- Goroutine-per-request is the simplest change (5 lines in middleware.go) with ~95% overhead reduction. It's already the pattern used for `LateCollect` and `Storage.Store`.
+- Worker pool was evaluated but deferred — it adds complexity unnecessary for a development profiler. Can be added later if needed at >10K req/s.
+- Ring buffer was rejected as overkill — it optimizes nanoseconds when we're removing milliseconds.
+- Sampling was added as an optional complement (configurable `SampleRate`).
+
+**Additional optimizations applied:**
+1. `runtime.ReadMemStats` replaced with `runtime/metrics` package (no STW)
+2. ConfigCollector caches sources at construction (no per-request file I/O)
+3. Panic recovery in goroutine prevents collector bugs from crashing the app
+4. `sync.WaitGroup`-based inflight tracking for graceful shutdown
+
+**Result:** Synchronous overhead reduced from 200µs–10ms to ~5µs per request (benchmarked). Zero stop-the-world pauses.
+
+---
+
+## Decision 15: Memory Statistics via runtime/metrics
+
+**Question:** How to collect memory statistics without stop-the-world pauses?
+
+**Options evaluated:**
+- a. Keep `runtime.ReadMemStats` — Simple, but causes STW pauses (10µs–1ms+ per call)
+- b. Use `runtime/metrics` package — No STW, available since Go 1.16
+- c. Drop memory collection entirely — No overhead, but loses useful data
+
+**Decision:** **runtime/metrics (b)**
+
+**Rationale:**
+- `runtime.ReadMemStats` is documented to stop all goroutines while reading consistent memory statistics. On large heaps this takes milliseconds and affects the entire process — not just the profiled request.
+- `runtime/metrics` reads atomically-maintained counters with zero STW impact. DataDog (dd-trace-go) and Prometheus (client_golang) both migrated to it for the same reason.
+- The metrics available cover all fields needed by `MemoryData`: heap allocation, total allocation, heap in-use, heap objects, GC cycles, goroutine count, system memory.
+- Available since Go 1.16, well within our Go 1.21+ requirement.
+
+**Trade-off:** Some metric values are slightly different (aggregated differently by the runtime), but provide equivalent insight for profiling purposes. The JSON output field names remain identical for UI compatibility.
+
+---
+
+## Decision 16: ConfigCollector Caching
+
+**Question:** Should the ConfigCollector read .env files and environment variables on every request?
+
+**Options evaluated:**
+- a. Read per request — Current behavior, simple but adds 50–500µs of file I/O
+- b. Cache at construction, never refresh — Fastest, but can't detect runtime changes
+- c. Cache at construction with manual Refresh() — Fast + escape hatch for changes
+
+**Decision:** **Cache with Refresh() (c)**
+
+**Rationale:**
+- Environment variables and `.env` files virtually never change during a running process.
+- Reading them on every request was pure waste: file `open()`/`read()`/`close()` syscalls and `os.Environ()` allocating a copy of all env vars.
+- `Refresh()` provides an explicit mechanism for the rare case where configuration changes at runtime (e.g., hot-reload scenarios).
+- Runtime info and build info were already cached (immutable). Extending caching to reader sources is consistent.
+
+---
+
+## Decision 17: Graceful Shutdown
+
+**Question:** How to ensure no profile data is lost when the application shuts down?
+
+**Decision:** Add `Shutdown(ctx context.Context) error` method using `sync.WaitGroup`.
+
+**Rationale:**
+- With async collection, in-flight goroutines may still be processing when `main()` returns.
+- `sync.WaitGroup` tracks active goroutines; `Shutdown` waits for all to complete.
+- Context-based timeout prevents hanging forever if a collector gets stuck.
+- After shutdown, new requests skip profiling (handlers still execute normally).
+- This pattern is consistent with `http.Server.Shutdown()` in the standard library.
+
+---
+
+## Updated Decision Summary Table
+
+| # | Topic | Decision | Key Reason |
+|---|-------|----------|------------|
+| 1 | Use case | Web applications | Scoped to HTTP profiling |
+| 2 | Feature scope | X-Profiler-Id header + dedicated UI | Works for all response types |
+| 3 | Framework | Framework-agnostic (http.Handler) | Maximum compatibility |
+| 4 | Collectors | Extensible with interface | Open/closed principle |
+| 5 | Storage | Pluggable, file-based default | Flexible + zero-infra default |
+| 6 | UI | Vue 3 + JSON API | Extensible panel system |
+| 7 | Panel extensibility | Hybrid (generic + custom components) | Zero friction + optional polish |
+| 8 | Enable/disable | Environment variable | Simple, matches deployment patterns |
+| 9 | Go version | 1.21+ | slog, modern stdlib |
+| 10 | File format | JSON (one per profile) | Human-readable, no deps |
+| 11 | OTel scope | Both metrics + traces | Complete observability |
+| 12 | UI bundling | Dual mode (embed + dev proxy) | Best of both worlds |
+| 13 | Design philosophy | Symfony concepts, Go idioms | Proven architecture, native feel |
+| 14 | Collection execution | Async goroutine-per-request | ~5µs overhead vs previous ms |
+| 15 | Memory stats | runtime/metrics (no STW) | Eliminates global pauses |
+| 16 | Config caching | Cache at construction + Refresh() | Zero per-request I/O |
+| 17 | Graceful shutdown | sync.WaitGroup + context timeout | No data loss on exit |

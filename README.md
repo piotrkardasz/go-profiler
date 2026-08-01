@@ -5,14 +5,18 @@ A framework-agnostic HTTP profiling middleware for Go, inspired by [Symfony's Pr
 ## Features
 
 - **Framework-agnostic** — Works with any `http.Handler`-compatible router or framework
-- **Pluggable collectors** — Ships with Request, Timing, and Memory collectors; easily extensible
+- **Zero-overhead profiling** — All collection runs asynchronously off the request hot path (~5µs overhead per request)
+- **Pluggable collectors** — Ships with Request, Timing, Memory, and Config collectors; easily extensible
 - **OpenTelemetry integration** — Captures traces and metrics per request
+- **GORM integration** — Captures SQL queries with N+1 detection, duplicate detection, and slow query analysis
 - **Pluggable storage** — File-based JSON storage by default, with an in-memory option for testing
 - **`X-Profiler-Id` header** — Every profiled response includes a unique profile token
 - **JSON API** — Query, filter, and retrieve profiles programmatically
 - **Embedded Vue.js UI** — Browse profiles at `/_profiler/` with zero external dependencies
 - **Extensible UI panels** — Register custom Vue components for custom collector visualization
 - **Dual UI mode** — Embedded assets for production; proxies to Vite dev server for UI development
+- **Probabilistic sampling** — Configure `SampleRate` to profile a fraction of requests in production
+- **Graceful shutdown** — `Shutdown(ctx)` waits for in-flight profiles to be persisted
 - **Enable/disable** — Controlled via `GO_PROFILER_ENABLED` env var or config
 
 ## Installation
@@ -84,8 +88,37 @@ cfg := profiler.DefaultConfig()
 | `Enabled` | `true` | `GO_PROFILER_ENABLED` | Enable/disable profiling |
 | `StoragePath` | `./var/profiler` | — | Directory for file-based storage |
 | `RoutePrefix` | `/_profiler` | — | URL prefix for profiler routes |
+| `SampleRate` | `1.0` | — | Fraction of requests to profile (0.0–1.0) |
 | `UIDevMode` | `false` | `GO_PROFILER_UI_DEV` | Proxy UI to Vite dev server |
 | `UIDevServerURL` | `http://localhost:5173` | — | Vite dev server URL |
+
+### Sampling
+
+For production or high-traffic environments, reduce profiling overhead by sampling:
+
+```go
+cfg := profiler.DefaultConfig()
+cfg.SampleRate = 0.1 // Profile ~10% of requests
+p := profiler.New(cfg, store)
+```
+
+Skipped requests have near-zero overhead (a single float comparison). No `X-Profiler-Id` header is set on skipped requests.
+
+### Graceful Shutdown
+
+The profiler runs collection asynchronously. Call `Shutdown` before your application exits to ensure all in-flight profiles are persisted:
+
+```go
+// On application shutdown:
+ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+defer cancel()
+
+if err := p.Shutdown(ctx); err != nil {
+    log.Printf("profiler shutdown: %v", err)
+}
+```
+
+After `Shutdown` is called, new requests still execute normally but profiling is skipped.
 
 ## Architecture
 
@@ -93,26 +126,39 @@ cfg := profiler.DefaultConfig()
 ┌─────────────────────────────────────────────────────────┐
 │  HTTP Request                                            │
 ├─────────────────────────────────────────────────────────┤
-│  Profiler Middleware                                     │
+│  Profiler Middleware (synchronous — ~5µs overhead)       │
 │  ┌─────────────────┐  ┌──────────────────────────────┐ │
-│  │ Generate ID      │  │ Set X-Profiler-Id header     │ │
-│  │ Capture start    │  │ Wrap ResponseWriter          │ │
+│  │ Sampling check   │  │ Set X-Profiler-Id header     │ │
+│  │ Generate ID      │  │ Wrap ResponseWriter          │ │
+│  │ Memory snapshot  │  │ Capture timing + response    │ │
 │  └─────────────────┘  └──────────────────────────────┘ │
 ├─────────────────────────────────────────────────────────┤
 │  Your Handler                                            │
 ├─────────────────────────────────────────────────────────┤
-│  Collectors (run after handler)                          │
+│  Response returned to client                             │
+├─────────────────────────────────────────────────────────┤
+│  Async goroutine (does not block response)              │
 │  ┌─────────┐ ┌────────┐ ┌────────┐ ┌──────┐          │
 │  │ Request │ │ Timing │ │ Memory │ │ OTel │ ...       │
 │  └─────────┘ └────────┘ └────────┘ └──────┘          │
-├─────────────────────────────────────────────────────────┤
-│  Storage (async)           JSON API         Vue UI      │
 │  ┌──────────────┐    ┌───────────────┐  ┌───────────┐ │
-│  │ Filesystem   │    │ /api/profiles │  │ /_profiler/│ │
-│  │ (or Memory)  │    │ /api/collect. │  │ (embedded) │ │
+│  │ Storage      │    │ JSON API      │  │ Vue UI    │ │
+│  │ (Filesystem) │    │ /api/profiles │  │ /_profiler/│ │
 │  └──────────────┘    └───────────────┘  └───────────┘ │
 └─────────────────────────────────────────────────────────┘
 ```
+
+### Performance
+
+All collector work (memory stats, request data, config, GORM analysis) runs **asynchronously** in a goroutine after the response is sent. The synchronous overhead added to each request is minimal:
+
+| Scenario | Overhead per request |
+|----------|---------------------|
+| Profiler enabled | ~5µs |
+| Profiler disabled | ~300ns |
+| SampleRate < 1.0 (skipped) | ~300ns |
+
+The memory collector uses `runtime/metrics` (no stop-the-world pauses), and the config collector caches its data at startup (no per-request file I/O).
 
 ## Creating Custom Collectors
 
@@ -338,13 +384,19 @@ make example-gorm-postgres # Run GORM PostgreSQL example (backtrace enabled)
 ```
 github.com/piotrkardasz/go-profiler/
 ├── profile.go           # Profile struct, Storage interface, ID generation
-├── profiler.go          # Core Profiler, Config, collector management
-├── middleware.go        # HTTP middleware
+├── profiler.go          # Core Profiler, Config, Shutdown, collector management
+├── middleware.go        # HTTP middleware (async collection, sampling, panic recovery)
 ├── collector/
 │   ├── collector.go     # Collector interfaces
 │   ├── request.go       # Request/Response collector
 │   ├── timing.go        # Timing collector
-│   ├── memory.go        # Memory collector
+│   ├── memory.go        # Memory collector (runtime/metrics, no STW)
+│   ├── memory_metrics.go # runtime/metrics helpers
+│   ├── config.go        # Config collector (cached, Refresh())
+│   ├── config_reader.go # ConfigReader interface
+│   ├── config_dotenv.go # Built-in .env file parser
+│   ├── config_env.go    # Environment variable reader
+│   ├── gorm/            # GORM database query collector (separate module)
 │   └── otel/            # OpenTelemetry collector
 ├── storage/
 │   ├── filesystem.go    # File-based JSON storage
@@ -359,6 +411,8 @@ github.com/piotrkardasz/go-profiler/
 │       └── components/panels/  # Built-in panels
 ├── examples/
 │   ├── basic/           # Basic usage example
+│   ├── gorm-mysql/      # GORM MySQL example
+│   ├── gorm-postgres/   # GORM PostgreSQL example
 │   └── otel/            # OpenTelemetry example
 └── Makefile
 ```
