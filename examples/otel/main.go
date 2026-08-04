@@ -1,6 +1,14 @@
 // Package main demonstrates the go-profiler with the OpenTelemetry collector.
 // It creates spans and metrics during request handling and shows them in the
 // profiler UI's OTel panel.
+//
+// Run with embedded UI:
+//
+//	go build -tags profiler_ui -o otel . && ./otel
+//
+// Run in dev mode (proxies to Vite dev server, no UI build needed):
+//
+//	GO_PROFILER_UI_DEV=true go run .
 package main
 
 import (

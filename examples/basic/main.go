@@ -1,6 +1,14 @@
 // Package main demonstrates basic usage of the go-profiler package.
 // It sets up an HTTP server with the profiler middleware, built-in collectors,
 // and the profiler UI/API routes.
+//
+// Run with embedded UI:
+//
+//	go build -tags profiler_ui -o basic . && ./basic
+//
+// Run in dev mode (proxies to Vite dev server, no UI build needed):
+//
+//	GO_PROFILER_UI_DEV=true go run .
 package main
 
 import (

@@ -27,6 +27,24 @@ go get github.com/piotrkardasz/go-profiler
 
 Requires Go 1.21+.
 
+### Building with Embedded UI
+
+The profiler UI assets are pre-built and committed to the repository. To embed
+them into your binary, use the `profiler_ui` build tag:
+
+```bash
+go build -tags profiler_ui ./cmd/myapp
+```
+
+Without the tag, `UIDistFS()` returns nil and the UI handler responds with 404.
+This is useful for development mode where you proxy to the Vite dev server instead.
+
+### Development Mode (no build tag needed)
+
+```bash
+GO_PROFILER_UI_DEV=true go run ./cmd/myapp
+```
+
 ## Quick Start
 
 ```go
@@ -214,25 +232,58 @@ func (c *DBCollector) LateCollect(ctx context.Context) (any, error) {
 
 ## Creating Custom UI Panels
 
-Register a Vue component for your custom collector:
+The profiler UI uses a plugin registry with a `GenericPanel` fallback. Custom
+collectors that return JSON data automatically render as an interactive JSON tree
+— no UI rebuild required.
+
+For richer visualization (charts, tables, etc.), you can write a custom Vue
+component and rebuild the UI with the `profiler-setup` tool:
+
+### Step 1: Copy the UI source
+
+```bash
+cp -r $(go list -m -json github.com/piotrkardasz/go-profiler | jq -r .Dir)/ui ./profiler-ui
+```
+
+### Step 2: Create your panel component
+
+```vue
+<!-- profiler-ui/src/components/panels/DatabasePanel.vue -->
+<script setup lang="ts">
+defineProps<{
+  data: unknown
+  collectorName: string
+}>()
+</script>
+
+<template>
+  <div class="database-panel">
+    <!-- Your custom rendering -->
+  </div>
+</template>
+```
+
+### Step 3: Register the panel
 
 ```typescript
-// In your Vue app setup
-import { registerPanel } from '@/plugin'
-import DatabasePanel from './DatabasePanel.vue'
+// In profiler-ui/src/plugin/builtin.ts, add:
+import DatabasePanel from '@/components/panels/DatabasePanel.vue'
 
 registerPanel('database', DatabasePanel)
 ```
 
-Your panel component receives these props:
+### Step 4: Build and embed
 
-```vue
-<script setup lang="ts">
-defineProps<{
-  data: unknown        // The collector's JSON data
-  collectorName: string // The collector's name
-}>()
-</script>
+```bash
+# Using Go 1.24+ tool directive:
+go get -tool github.com/piotrkardasz/go-profiler/cmd/profiler-setup
+go tool profiler-setup --ui-source=./profiler-ui --output=./vendor/github.com/piotrkardasz/go-profiler/handler/ui_dist
+
+# Or using go run:
+go run github.com/piotrkardasz/go-profiler/cmd/profiler-setup --ui-source=./profiler-ui --output=./handler/ui_dist
+
+# Then build with the tag:
+go build -tags profiler_ui ./cmd/myapp
 ```
 
 Collectors without a registered panel automatically use the generic JSON tree view.
@@ -367,10 +418,13 @@ The Make targets `example-gorm-mysql` and `example-gorm-postgres` enable backtra
 ## Make Targets
 
 ```
-make build              # Build UI + Go package
+make build              # Build UI + Go package (with -tags profiler_ui)
+make build-dev          # Build Go package without embedded UI (no Node.js required)
 make test               # Run all Go tests
+make test-ui            # Run all Go tests with embedded UI
 make vet                # Run go vet
 make ui-build           # Build Vue UI for production
+make ui-dist            # Build UI and copy to handler/ui_dist
 make ui-dev             # Start Vue UI dev server
 make clean              # Clean build artifacts
 make example-basic      # Run basic example
@@ -386,6 +440,8 @@ github.com/piotrkardasz/go-profiler/
 ├── profile.go           # Profile struct, Storage interface, ID generation
 ├── profiler.go          # Core Profiler, Config, Shutdown, collector management
 ├── middleware.go        # HTTP middleware (async collection, sampling, panic recovery)
+├── cmd/
+│   └── profiler-setup/  # CLI tool for power users (custom Vue panels)
 ├── collector/
 │   ├── collector.go     # Collector interfaces
 │   ├── request.go       # Request/Response collector
@@ -404,11 +460,16 @@ github.com/piotrkardasz/go-profiler/
 ├── handler/
 │   ├── api.go           # JSON API handlers
 │   ├── ui.go            # UI handler (embed + dev proxy)
-│   └── embed.go         # Embedded UI assets
-├── ui/                  # Vue 3 + Vite + TypeScript
+│   ├── embed_ui.go      # //go:build profiler_ui — embeds ui_dist/
+│   ├── embed_stub.go    # //go:build !profiler_ui — returns nil
+│   └── ui_dist/         # Pre-built Vue UI assets (committed, auto-updated by CI)
+├── ui/                  # Vue 3 + Vite + TypeScript source
 │   └── src/
-│       ├── plugin/      # Panel plugin system
+│       ├── plugin/      # Panel plugin system (registry + GenericPanel fallback)
 │       └── components/panels/  # Built-in panels
+├── .github/workflows/
+│   ├── build-ui.yml     # Auto-rebuild ui_dist on push to main
+│   └── check-ui-freshness.yml  # PR check for stale assets
 ├── examples/
 │   ├── basic/           # Basic usage example
 │   ├── gorm-mysql/      # GORM MySQL example
