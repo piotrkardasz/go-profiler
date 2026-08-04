@@ -1,3 +1,5 @@
+//go:build profiler_ui
+
 package handler
 
 import (
