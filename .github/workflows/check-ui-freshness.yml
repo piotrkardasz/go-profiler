@@ -1,0 +1,36 @@
+name: Check UI Assets Freshness
+
+on:
+  pull_request:
+    paths:
+      - 'ui/**'
+      - 'handler/ui_dist/**'
+
+jobs:
+  check-freshness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Build UI
+        run: |
+          cd ui
+          npm ci
+          npm run build
+
+      - name: Check ui_dist is up to date
+        run: |
+          rm -rf /tmp/ui_dist_check
+          cp -r ui/dist /tmp/ui_dist_check
+          if ! diff -r /tmp/ui_dist_check handler/ui_dist > /dev/null 2>&1; then
+            echo "::warning::handler/ui_dist/ is stale. It will be auto-updated when this PR merges to main."
+            echo "To update locally, run: make ui-dist"
+          else
+            echo "handler/ui_dist/ is up to date"
+          fi
