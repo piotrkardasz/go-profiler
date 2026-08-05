@@ -47,7 +47,7 @@ clean: ## Clean build artifacts
 
 example-basic: build ## Run the basic example
 	@echo "Starting basic example server..."
-	@go run -tags profiler_ui ./examples/basic/
+	@PROFILER_LOGGER_BACKTRACE=1 go run -tags profiler_ui ./examples/basic/
 
 example-otel: build ## Run the OpenTelemetry example
 	@echo "Starting OTel example server..."
