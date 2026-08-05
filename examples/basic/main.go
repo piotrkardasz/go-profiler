@@ -13,10 +13,12 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"log/slog"
 	"math/rand"
 	"net/http"
+	"os"
 	"time"
 
 	profiler "github.com/piotrkardasz/go-profiler"
@@ -26,6 +28,10 @@ import (
 )
 
 func main() {
+	// Load .env file into process environment so profiler env vars take effect.
+	// In production apps, you'd typically use github.com/joho/godotenv for this.
+	loadDotenv(".env")
+
 	// Create storage (file-based, default directory)
 	store, err := storage.NewFilesystemStorage("./var/profiler")
 	if err != nil {
@@ -36,7 +42,11 @@ func main() {
 	cfg := profiler.DefaultConfig()
 	p := profiler.New(cfg, store)
 
-	// Register built-in collectors
+	// Register built-in collectors.
+	// Body capture and header redaction are controlled by .env file:
+	//   PROFILER_CAPTURE_BODY=true    → captures request bodies in profiles
+	//   PROFILER_REDACT_HEADERS=false → shows full Authorization/Cookie values
+	// Can also be set programmatically: collector.WithBodyCapture(true), collector.WithRedactHeaders(false)
 	p.AddCollector(collector.NewRequestCollector())
 	p.AddCollector(collector.NewTimingCollector())
 	p.AddCollector(collector.NewMemoryCollector())
@@ -71,6 +81,7 @@ func main() {
 	// Register application routes
 	mux.HandleFunc("/", handleHome)
 	mux.HandleFunc("/api/users", handleUsers)
+	mux.HandleFunc("/api/echo", handleEcho)
 	mux.HandleFunc("/api/slow", handleSlow)
 	mux.HandleFunc("/api/error", handleError)
 
@@ -89,6 +100,7 @@ func main() {
 	fmt.Println("Try these endpoints:")
 	fmt.Println("  GET  http://localhost:8080/")
 	fmt.Println("  GET  http://localhost:8080/api/users")
+	fmt.Println("  POST http://localhost:8080/api/echo  (JSON body → profile includes payload + curl)")
 	fmt.Println("  GET  http://localhost:8080/api/slow")
 	fmt.Println("  GET  http://localhost:8080/api/error")
 	fmt.Println()
@@ -116,6 +128,7 @@ func handleHome(w http.ResponseWriter, r *http.Request) {
 <h2>Test Endpoints:</h2>
 <ul>
 <li><a href="/api/users">/api/users</a> - Returns mock user data</li>
+<li><form action="/api/echo" method="POST" style="display:inline"><input type="hidden" name="message" value="hello"><button type="submit">/api/echo</button></form> - Echo body (POST, demonstrates payload capture + curl)</li>
 <li><a href="/api/slow">/api/slow</a> - Simulates a slow request</li>
 <li><a href="/api/error">/api/error</a> - Returns a 500 error</li>
 </ul>
@@ -151,4 +164,49 @@ func handleError(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusInternalServerError)
 	fmt.Fprint(w, `{"error": "Something went wrong"}`)
+}
+
+// handleEcho demonstrates body capture. POST a JSON body and it echoes it back.
+// The profiler captures the request body and generates a curl command.
+// Try: curl -X POST http://localhost:8080/api/echo -H 'Content-Type: application/json' -d '{"message":"hello"}'
+func handleEcho(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		fmt.Fprint(w, `{"error": "POST only"}`)
+		return
+	}
+
+	slog.InfoContext(r.Context(), "echo request received", "content_type", r.Header.Get("Content-Type"))
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `{"error": "failed to read body"}`)
+		return
+	}
+	defer r.Body.Close()
+
+	slog.InfoContext(r.Context(), "echoing body", "size", len(body))
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(body)
+}
+
+
+// loadDotenv reads a .env file and sets its entries as environment variables.
+// This enables profiler env vars (PROFILER_CAPTURE_BODY, PROFILER_REDACT_HEADERS, etc.)
+// to be configured via .env without external dependencies.
+// Silently skips if the file doesn't exist.
+func loadDotenv(path string) {
+	reader := collector.NewDotenvReader(path)
+	entries, err := reader.Read()
+	if err != nil || len(entries) == 0 {
+		return
+	}
+	for _, entry := range entries {
+		// Only set if not already set in the real environment (real env takes precedence)
+		if os.Getenv(entry.Key) == "" {
+			os.Setenv(entry.Key, entry.Value)
+		}
+	}
 }
