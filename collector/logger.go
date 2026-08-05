@@ -126,17 +126,9 @@ func NewLoggerCollector(opts ...LoggerOption) *LoggerCollector {
 
 	c.captureFunc = c.buildCaptureFunc()
 
-	// Install slog adapter unless disabled.
-	if !o.slogDisabled {
-		adapter := &slogLogAdapter{
-			addSource: o.callerInfo,
-		}
-		adapter.forwarder = c.forwarder
-		removeFunc := adapter.Install(c.captureFunc)
-		c.removeFuncs = append(c.removeFuncs, removeFunc)
-	}
-
-	// Install stdlog adapter unless disabled.
+	// Install stdlog adapter first so we can capture the original writer
+	// before slog installation. This prevents the feedback loop where slog's
+	// inner handler writes formatted output back through the stdlog adapter.
 	if !o.stdLogDisabled {
 		adapter := &stdLogLogAdapter{
 			bufferSize: o.forwardBufSize,
@@ -147,6 +139,22 @@ func NewLoggerCollector(opts ...LoggerOption) *LoggerCollector {
 		if w, ok := log.Writer().(*StdLogAdapter); ok {
 			c.stdLogAdapter = w
 		}
+	}
+
+	// Install slog adapter after stdlog so we can provide the original writer
+	// for forwarding, bypassing the stdlog intercept.
+	if !o.slogDisabled {
+		adapter := &slogLogAdapter{
+			addSource: o.callerInfo,
+		}
+		adapter.forwarder = c.forwarder
+		// Pass the original (pre-intercept) writer so the slog inner handler
+		// writes directly to the real output, not back through StdLogAdapter.
+		if c.stdLogAdapter != nil {
+			adapter.originalWriter = c.stdLogAdapter.original
+		}
+		removeFunc := adapter.Install(c.captureFunc)
+		c.removeFuncs = append(c.removeFuncs, removeFunc)
 	}
 
 	// Install user-provided adapters.

@@ -2,6 +2,7 @@ package collector
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"path/filepath"
 	"runtime"
@@ -100,6 +101,7 @@ type slogLogAdapter struct {
 	addSource       bool
 	forwarder       *LogForwarder
 	originalHandler slog.Handler
+	originalWriter  io.Writer
 }
 
 // NewSlogLogAdapter creates a new LogAdapter implementation for slog.
@@ -126,7 +128,18 @@ func (a *slogLogAdapter) Install(capture CaptureFunc) RemoveFunc {
 		forwarder = NewLogForwarder(4096)
 	}
 
-	adapter := NewSlogAdapter(originalHandler, capture, forwarder, a.addSource)
+	// When an originalWriter is provided (i.e., the stdlog adapter's pre-intercept
+	// writer), create a fresh text handler writing directly to it. This prevents
+	// forwarded slog records from passing back through the StdLogAdapter and
+	// being captured a second time with an already-formatted message.
+	innerHandler := originalHandler
+	if a.originalWriter != nil {
+		innerHandler = slog.NewTextHandler(a.originalWriter, &slog.HandlerOptions{
+			AddSource: a.addSource,
+		})
+	}
+
+	adapter := NewSlogAdapter(innerHandler, capture, forwarder, a.addSource)
 	slog.SetDefault(slog.New(adapter))
 
 	return func() {
