@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"os"
 )
 
 const (
@@ -15,15 +16,27 @@ const (
 
 // loggerOptions holds configuration for the LoggerCollector.
 type loggerOptions struct {
-	adapters       []LogAdapter
-	minLevel       LogLevel
-	maxEntries     int
-	callerInfo     bool
-	stackTrace     bool
-	slogDisabled   bool
-	stdLogDisabled bool
-	attrMaxSize    int
-	forwardBufSize int
+	adapters         []LogAdapter
+	minLevel         LogLevel
+	maxEntries       int
+	callerInfo       bool
+	stackTrace       bool
+	backtraceEnabled *bool
+	slogDisabled     bool
+	stdLogDisabled   bool
+	attrMaxSize      int
+	forwardBufSize   int
+}
+
+// isBacktraceEnabled returns whether backtrace capture is enabled.
+// Checks the explicit option first, then falls back to the
+// PROFILER_LOGGER_BACKTRACE environment variable.
+func (o *loggerOptions) isBacktraceEnabled() bool {
+	if o.backtraceEnabled != nil {
+		return *o.backtraceEnabled
+	}
+	env := os.Getenv("PROFILER_LOGGER_BACKTRACE")
+	return env == "true" || env == "1"
 }
 
 // LoggerOption is a functional option for configuring a LoggerCollector.
@@ -93,6 +106,16 @@ func WithForwardBufferSize(size int) LoggerOption {
 	}
 }
 
+// WithBacktrace enables or disables call stack backtrace capture for log entries.
+// When enabled, each log entry's Stack field is populated with the call stack
+// showing where the log call originated. Disabled by default.
+// Can also be enabled via the PROFILER_LOGGER_BACKTRACE environment variable.
+func WithBacktrace(enabled bool) LoggerOption {
+	return func(o *loggerOptions) {
+		o.backtraceEnabled = &enabled
+	}
+}
+
 // LoggerCollector captures log entries from multiple logging libraries during
 // HTTP request processing. It implements the Collector, ContextSetup, and
 // PanelProvider interfaces.
@@ -126,12 +149,15 @@ func NewLoggerCollector(opts ...LoggerOption) *LoggerCollector {
 
 	c.captureFunc = c.buildCaptureFunc()
 
+	backtraceEnabled := o.isBacktraceEnabled()
+
 	// Install stdlog adapter first so we can capture the original writer
 	// before slog installation. This prevents the feedback loop where slog's
 	// inner handler writes formatted output back through the stdlog adapter.
 	if !o.stdLogDisabled {
 		adapter := &stdLogLogAdapter{
 			bufferSize: o.forwardBufSize,
+			backtrace:  backtraceEnabled,
 		}
 		removeFunc := adapter.Install(c.captureFunc)
 		c.removeFuncs = append(c.removeFuncs, removeFunc)
@@ -146,6 +172,7 @@ func NewLoggerCollector(opts ...LoggerOption) *LoggerCollector {
 	if !o.slogDisabled {
 		adapter := &slogLogAdapter{
 			addSource: o.callerInfo,
+			backtrace: backtraceEnabled,
 		}
 		adapter.forwarder = c.forwarder
 		// Pass the original (pre-intercept) writer so the slog inner handler

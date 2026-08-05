@@ -22,6 +22,7 @@ type stdLogForwardRecord struct {
 type StdLogAdapter struct {
 	original  io.Writer
 	capture   CaptureFunc
+	backtrace bool
 	activeCtx atomic.Pointer[context.Context]
 	forwardCh chan stdLogForwardRecord
 	done      chan struct{}
@@ -59,6 +60,10 @@ func (a *StdLogAdapter) Write(p []byte) (int, error) {
 		Level:     LevelInfo,
 		Message:   msg,
 		Source:    "log",
+	}
+
+	if a.backtrace {
+		entry.Stack = CaptureLogBacktrace()
 	}
 
 	var ctx context.Context
@@ -100,6 +105,7 @@ func (a *StdLogAdapter) Close() {
 // package.
 type stdLogLogAdapter struct {
 	bufferSize int
+	backtrace  bool
 }
 
 // Name returns the identifier for this adapter.
@@ -114,6 +120,7 @@ func (a *stdLogLogAdapter) Install(capture CaptureFunc) RemoveFunc {
 	original := log.Writer()
 	adapter := NewStdLogAdapter(capture, a.bufferSize)
 	adapter.original = original
+	adapter.backtrace = a.backtrace
 	log.SetOutput(adapter)
 	return func() {
 		log.SetOutput(original)

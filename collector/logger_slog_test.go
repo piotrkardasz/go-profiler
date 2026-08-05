@@ -61,7 +61,7 @@ func TestSlogAdapterCapturesInfoRecord(t *testing.T) {
 	forwarder := NewLogForwarder(64)
 	captured := &capturedEntries{}
 
-	adapter := NewSlogAdapter(inner, captured.capture, forwarder, false)
+	adapter := NewSlogAdapter(inner, captured.capture, forwarder, false, false)
 
 	buf := NewLogBuffer(100)
 	ctx := WithLogBuffer(context.Background(), buf)
@@ -102,7 +102,7 @@ func TestSlogAdapterCapturesAllLevels(t *testing.T) {
 			forwarder := NewLogForwarder(64)
 			captured := &capturedEntries{}
 
-			adapter := NewSlogAdapter(inner, captured.capture, forwarder, false)
+			adapter := NewSlogAdapter(inner, captured.capture, forwarder, false, false)
 
 			buf := NewLogBuffer(100)
 			ctx := WithLogBuffer(context.Background(), buf)
@@ -151,7 +151,7 @@ func TestSlogAdapterAttributes(t *testing.T) {
 	forwarder := NewLogForwarder(64)
 	captured := &capturedEntries{}
 
-	adapter := NewSlogAdapter(inner, captured.capture, forwarder, false)
+	adapter := NewSlogAdapter(inner, captured.capture, forwarder, false, false)
 
 	buf := NewLogBuffer(100)
 	ctx := WithLogBuffer(context.Background(), buf)
@@ -189,7 +189,7 @@ func TestSlogAdapterGroupedAttributes(t *testing.T) {
 	forwarder := NewLogForwarder(64)
 	captured := &capturedEntries{}
 
-	adapter := NewSlogAdapter(inner, captured.capture, forwarder, false)
+	adapter := NewSlogAdapter(inner, captured.capture, forwarder, false, false)
 	grouped := adapter.WithGroup("db").(*SlogAdapter)
 
 	buf := NewLogBuffer(100)
@@ -223,7 +223,7 @@ func TestSlogAdapterPreAttrs(t *testing.T) {
 	forwarder := NewLogForwarder(64)
 	captured := &capturedEntries{}
 
-	adapter := NewSlogAdapter(inner, captured.capture, forwarder, false)
+	adapter := NewSlogAdapter(inner, captured.capture, forwarder, false, false)
 	withAttrs := adapter.WithAttrs([]slog.Attr{slog.String("service", "api")}).(*SlogAdapter)
 
 	buf := NewLogBuffer(100)
@@ -255,7 +255,7 @@ func TestSlogAdapterCallerInfo(t *testing.T) {
 	forwarder := NewLogForwarder(64)
 	captured := &capturedEntries{}
 
-	adapter := NewSlogAdapter(inner, captured.capture, forwarder, true)
+	adapter := NewSlogAdapter(inner, captured.capture, forwarder, true, false)
 
 	buf := NewLogBuffer(100)
 	ctx := WithLogBuffer(context.Background(), buf)
@@ -285,7 +285,7 @@ func TestSlogAdapterNoCallerWhenDisabled(t *testing.T) {
 	forwarder := NewLogForwarder(64)
 	captured := &capturedEntries{}
 
-	adapter := NewSlogAdapter(inner, captured.capture, forwarder, false)
+	adapter := NewSlogAdapter(inner, captured.capture, forwarder, false, false)
 
 	buf := NewLogBuffer(100)
 	ctx := WithLogBuffer(context.Background(), buf)
@@ -315,7 +315,7 @@ func TestSlogAdapterForwardsToInner(t *testing.T) {
 	forwarder := NewLogForwarder(64)
 	captured := &capturedEntries{}
 
-	adapter := NewSlogAdapter(inner, captured.capture, forwarder, false)
+	adapter := NewSlogAdapter(inner, captured.capture, forwarder, false, false)
 
 	buf := NewLogBuffer(100)
 	ctx := WithLogBuffer(context.Background(), buf)
@@ -342,7 +342,7 @@ func TestSlogAdapterEnabled(t *testing.T) {
 	forwarder := NewLogForwarder(64)
 	captured := &capturedEntries{}
 
-	adapter := NewSlogAdapter(inner, captured.capture, forwarder, false)
+	adapter := NewSlogAdapter(inner, captured.capture, forwarder, false, false)
 
 	ctx := context.Background()
 
@@ -363,7 +363,7 @@ func TestSlogAdapterContextRequired(t *testing.T) {
 	forwarder := NewLogForwarder(64)
 	captured := &capturedEntries{}
 
-	adapter := NewSlogAdapter(inner, captured.capture, forwarder, false)
+	adapter := NewSlogAdapter(inner, captured.capture, forwarder, false, false)
 
 	// Context without LogBuffer — should not panic.
 	ctx := context.Background()

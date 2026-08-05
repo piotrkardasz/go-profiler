@@ -17,6 +17,7 @@ type SlogAdapter struct {
 	capture   CaptureFunc
 	forwarder *LogForwarder
 	addSource bool
+	backtrace bool
 	groups    []string
 	attrs     []slog.Attr
 }
@@ -24,12 +25,13 @@ type SlogAdapter struct {
 // NewSlogAdapter creates a new SlogAdapter wrapping the given inner handler.
 // Log entries are captured via the provided CaptureFunc and forwarded
 // asynchronously through the LogForwarder.
-func NewSlogAdapter(inner slog.Handler, capture CaptureFunc, forwarder *LogForwarder, addSource bool) *SlogAdapter {
+func NewSlogAdapter(inner slog.Handler, capture CaptureFunc, forwarder *LogForwarder, addSource bool, backtrace bool) *SlogAdapter {
 	return &SlogAdapter{
 		inner:     inner,
 		capture:   capture,
 		forwarder: forwarder,
 		addSource: addSource,
+		backtrace: backtrace,
 	}
 }
 
@@ -53,6 +55,10 @@ func (a *SlogAdapter) Handle(ctx context.Context, r slog.Record) error {
 		entry.Caller = formatCaller(r.PC)
 	}
 
+	if a.backtrace {
+		entry.Stack = CaptureLogBacktrace()
+	}
+
 	a.capture(ctx, entry)
 	a.forwarder.Forward(ctx, r, a.inner)
 
@@ -73,6 +79,7 @@ func (a *SlogAdapter) WithAttrs(attrs []slog.Attr) slog.Handler {
 		capture:   a.capture,
 		forwarder: a.forwarder,
 		addSource: a.addSource,
+		backtrace: a.backtrace,
 		groups:    newGroups,
 		attrs:     newAttrs,
 	}
@@ -90,6 +97,7 @@ func (a *SlogAdapter) WithGroup(name string) slog.Handler {
 		capture:   a.capture,
 		forwarder: a.forwarder,
 		addSource: a.addSource,
+		backtrace: a.backtrace,
 		groups:    newGroups,
 		attrs:     a.attrs,
 	}
@@ -99,6 +107,7 @@ func (a *SlogAdapter) WithGroup(name string) slog.Handler {
 // slog package.
 type slogLogAdapter struct {
 	addSource       bool
+	backtrace       bool
 	forwarder       *LogForwarder
 	originalHandler slog.Handler
 	originalWriter  io.Writer
@@ -139,7 +148,7 @@ func (a *slogLogAdapter) Install(capture CaptureFunc) RemoveFunc {
 		})
 	}
 
-	adapter := NewSlogAdapter(innerHandler, capture, forwarder, a.addSource)
+	adapter := NewSlogAdapter(innerHandler, capture, forwarder, a.addSource, a.backtrace)
 	slog.SetDefault(slog.New(adapter))
 
 	return func() {
