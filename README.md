@@ -6,7 +6,7 @@ A framework-agnostic HTTP profiling middleware for Go, inspired by [Symfony's Pr
 
 - **Framework-agnostic** — Works with any `http.Handler`-compatible router or framework
 - **Zero-overhead profiling** — All collection runs asynchronously off the request hot path (~5µs overhead per request)
-- **Pluggable collectors** — Ships with Request, Timing, Memory, and Config collectors; easily extensible
+- **Pluggable collectors** — Ships with Request, Timing, Memory, Config, and Logger collectors; easily extensible
 - **OpenTelemetry integration** — Captures traces and metrics per request
 - **GORM integration** — Captures SQL queries with N+1 detection, duplicate detection, and slow query analysis
 - **Pluggable storage** — File-based JSON storage by default, with an in-memory option for testing
@@ -72,6 +72,7 @@ func main() {
     p.AddCollector(collector.NewRequestCollector())
     p.AddCollector(collector.NewTimingCollector())
     p.AddCollector(collector.NewMemoryCollector())
+    p.AddCollector(collector.NewLoggerCollector())
 
     // Set up routes
     mux := http.NewServeMux()
@@ -370,6 +371,60 @@ GO_PROFILER_UI_DEV=true go run ./examples/basic/
 make ui-dev
 ```
 
+## Logger Collector
+
+The logger collector captures log entries produced during each HTTP request. It ships with built-in adapters for Go's `log/slog` and standard `log` packages and supports custom adapters for third-party libraries.
+
+```go
+import "github.com/piotrkardasz/go-profiler/collector"
+
+p.AddCollector(collector.NewLoggerCollector())
+```
+
+Options:
+
+```go
+p.AddCollector(collector.NewLoggerCollector(
+    collector.WithMinLevel(collector.LevelInfo),  // Capture INFO and above
+    collector.WithMaxEntries(500),                // Cap entries per request
+    collector.WithBacktrace(true),                // Capture call stacks
+))
+```
+
+### Logger Backtrace
+
+When backtrace is enabled, each log entry includes the call stack showing where the log call originated. This helps you trace which handler or function produced a specific log message.
+
+Enable via environment variable (no code change):
+
+```bash
+PROFILER_LOGGER_BACKTRACE=1 go run .
+```
+
+Or programmatically:
+
+```go
+p.AddCollector(collector.NewLoggerCollector(
+    collector.WithBacktrace(true),
+))
+```
+
+**Precedence:**
+1. Explicit `WithBacktrace(bool)` — highest priority
+2. `PROFILER_LOGGER_BACKTRACE` env variable (set to `"true"` or `"1"` to enable)
+3. Default: disabled
+
+When enabled, the Logs panel in the UI shows a collapsible stack trace for each entry:
+
+```
+/app/handlers/users.go:45 main.handleUsers
+/app/routes.go:32 main.setupRoutes.func1
+```
+
+Internal frames (runtime, slog internals, profiler machinery) are automatically filtered out.
+
+For custom `LogAdapter` implementations, call the exported `collector.CaptureLogBacktrace()` helper to populate the `LogEntry.Stack` field.
+
 ## GORM Collector
 
 The GORM collector captures per-request SQL queries, detects N+1 patterns, slow queries, and duplicates.
@@ -448,6 +503,8 @@ github.com/piotrkardasz/go-profiler/
 │   ├── timing.go        # Timing collector
 │   ├── memory.go        # Memory collector (runtime/metrics, no STW)
 │   ├── memory_metrics.go # runtime/metrics helpers
+│   ├── logger.go        # Logger collector (slog + stdlog adapters)
+│   ├── logger_backtrace.go # Log entry backtrace capture
 │   ├── config.go        # Config collector (cached, Refresh())
 │   ├── config_reader.go # ConfigReader interface
 │   ├── config_dotenv.go # Built-in .env file parser
