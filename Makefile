@@ -47,21 +47,21 @@ clean: ## Clean build artifacts
 
 example-basic: build ## Run the basic example
 	@echo "Starting basic example server..."
-	@go run ./examples/basic/
+	@go run -tags profiler_ui ./examples/basic/
 
 example-otel: build ## Run the OpenTelemetry example
 	@echo "Starting OTel example server..."
-	@go run ./examples/otel/
+	@go run -tags profiler_ui ./examples/otel/
 
 example-gorm-mysql: build ## Run the GORM MySQL example
 	@echo "Starting MySQL via Docker Compose..."
 	@cd examples/gorm-mysql && docker compose up -d --wait mysql
 	@sleep 2
 	@echo "Starting GORM MySQL example server..."
-	@cd examples/gorm-mysql && GORM_PROFILER_BACKTRACE=1 go run .
+	@cd examples/gorm-mysql && GORM_PROFILER_BACKTRACE=1 go run -tags profiler_ui .
 
 example-gorm-postgres: build ## Run the GORM PostgreSQL example
 	@echo "Starting PostgreSQL via Docker Compose..."
 	@cd examples/gorm-postgres && docker compose up -d --wait postgres
 	@echo "Starting GORM PostgreSQL example server..."
-	@cd examples/gorm-postgres && GORM_PROFILER_BACKTRACE=1 go run .
+	@cd examples/gorm-postgres && GORM_PROFILER_BACKTRACE=1 go run -tags profiler_ui .
