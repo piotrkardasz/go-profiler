@@ -14,3 +14,7 @@
 
 export { registerPanel, getPanel, hasCustomPanel, getRegisteredPanels } from './registry'
 export { initBuiltinPanels } from './builtin'
+
+// Comparison panel system
+export { registerComparePanel, getComparePanel, hasComparePanel } from './compare-registry'
+export { initCompareBuiltins } from './compare-builtin'

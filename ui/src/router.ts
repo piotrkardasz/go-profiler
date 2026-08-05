@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import ProfileList from './views/ProfileList.vue'
 import ProfileDetail from './views/ProfileDetail.vue'
+import ProfileCompare from './views/ProfileCompare.vue'
 
 const routes = [
   {
@@ -12,6 +13,12 @@ const routes = [
     path: '/_profiler/profile/:id',
     name: 'profile-detail',
     component: ProfileDetail,
+    props: true,
+  },
+  {
+    path: '/_profiler/compare/:idA/:idB',
+    name: 'profile-compare',
+    component: ProfileCompare,
     props: true,
   },
 ]

@@ -3,6 +3,17 @@
     <div class="list-header">
       <h1>Profiles</h1>
       <div class="list-actions">
+        <template v-if="selectedIds.size > 0">
+          <span class="selection-count">{{ selectedIds.size }} selected</span>
+          <button
+            class="btn btn-primary"
+            :disabled="selectedIds.size !== 2"
+            @click="compareSelected"
+          >
+            Compare
+          </button>
+          <button class="btn btn-secondary" @click="clearSelection">Clear</button>
+        </template>
         <button class="btn btn-secondary" @click="refresh">Refresh</button>
         <button class="btn btn-danger" @click="handlePurge">Purge</button>
         <button class="btn btn-danger btn-clear-all" :disabled="clearing" @click="handleClearAll">
@@ -42,6 +53,7 @@
     <table v-else class="profiles-table">
       <thead>
         <tr>
+          <th class="checkbox-col"></th>
           <th>Method</th>
           <th>URL</th>
           <th>Status</th>
@@ -55,8 +67,16 @@
           v-for="profile in profiles"
           :key="profile.id"
           @click="viewProfile(profile.id)"
-          class="profile-row"
+          :class="['profile-row', { selected: selectedIds.has(profile.id) }]"
         >
+          <td class="checkbox-col" @click.stop>
+            <input
+              type="checkbox"
+              :checked="selectedIds.has(profile.id)"
+              @change="toggleSelection(profile.id)"
+              class="profile-checkbox"
+            />
+          </td>
           <td>
             <span :class="['method-badge', `method-${profile.method.toLowerCase()}`]">
               {{ profile.method }}
@@ -89,6 +109,10 @@ const profiles = ref<ProfileSummary[]>([])
 const loading = ref(false)
 const clearing = ref(false)
 const error = ref('')
+
+// Selection state for comparison
+const selectedIds = ref<Set<string>>(new Set())
+const selectionOrder = ref<string[]>([])
 
 const filters = reactive({
   method: '',
@@ -147,6 +171,40 @@ async function handleClearAll() {
   }
 }
 
+function toggleSelection(id: string) {
+  const newSet = new Set(selectedIds.value)
+  const newOrder = [...selectionOrder.value]
+
+  if (newSet.has(id)) {
+    newSet.delete(id)
+    const idx = newOrder.indexOf(id)
+    if (idx !== -1) newOrder.splice(idx, 1)
+  } else {
+    // Enforce max 2: if already 2 selected, remove the oldest
+    if (newSet.size >= 2) {
+      const oldest = newOrder.shift()!
+      newSet.delete(oldest)
+    }
+    newSet.add(id)
+    newOrder.push(id)
+  }
+
+  selectedIds.value = newSet
+  selectionOrder.value = newOrder
+}
+
+function clearSelection() {
+  selectedIds.value = new Set()
+  selectionOrder.value = []
+}
+
+function compareSelected() {
+  if (selectionOrder.value.length === 2) {
+    const [idA, idB] = selectionOrder.value
+    router.push({ name: 'profile-compare', params: { idA, idB } })
+  }
+}
+
 function viewProfile(id: string) {
   router.push({ name: 'profile-detail', params: { id } })
 }
@@ -197,6 +255,13 @@ onMounted(loadProfiles)
 .list-actions {
   display: flex;
   gap: 0.5rem;
+  align-items: center;
+}
+
+.selection-count {
+  font-size: 0.85rem;
+  color: #495057;
+  font-weight: 500;
 }
 
 .btn {
@@ -211,6 +276,16 @@ onMounted(loadProfiles)
 
 .btn:hover {
   opacity: 0.85;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background: #4fc3f7;
+  color: #1a1a2e;
 }
 
 .btn-secondary {
@@ -301,6 +376,25 @@ onMounted(loadProfiles)
 
 .profile-row:hover {
   background: #f8f9fa;
+}
+
+.profile-row.selected {
+  background: #e8f4fd;
+}
+
+.profile-row.selected:hover {
+  background: #d4ecfb;
+}
+
+.checkbox-col {
+  width: 40px;
+  text-align: center;
+}
+
+.profile-checkbox {
+  cursor: pointer;
+  width: 16px;
+  height: 16px;
 }
 
 .method-badge {
