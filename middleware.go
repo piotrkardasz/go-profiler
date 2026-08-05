@@ -123,6 +123,13 @@ func (p *Profiler) Middleware(next http.Handler) http.Handler {
 
 		r = r.WithContext(ctx)
 
+		// Capture request body if the RequestCollector has body capture enabled.
+		// This must happen BEFORE the handler runs (body is consumed by handler).
+		if rc := p.requestCollector(); rc != nil && rc.BodyCaptureEnabled() {
+			ctx, r = rc.CaptureBody(ctx, r)
+			r = r.WithContext(ctx)
+		}
+
 		// Set the profiler ID header before the handler writes the response
 		w.Header().Set(HeaderProfilerID, profileID)
 

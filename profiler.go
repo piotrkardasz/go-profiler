@@ -242,6 +242,19 @@ func (p *Profiler) ResetCollectors() {
 	}
 }
 
+// requestCollector finds and returns the RequestCollector from registered collectors.
+// Returns nil if no RequestCollector is registered.
+func (p *Profiler) requestCollector() *collector.RequestCollector {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	for _, c := range p.collectors {
+		if rc, ok := c.(*collector.RequestCollector); ok {
+			return rc
+		}
+	}
+	return nil
+}
+
 // PanelMetas returns the panel metadata for all registered collectors.
 // Collectors implementing PanelProvider supply custom metadata; others get
 // a default panel with the collector name as both name and label.
