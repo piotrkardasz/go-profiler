@@ -1,4 +1,4 @@
-.PHONY: build build-dev test vet ui-build ui-dist ui-dev clean help example-basic example-otel example-gorm-mysql example-gorm-postgres
+.PHONY: build build-dev test test-http vet ui-build ui-dist ui-dev clean help example-basic example-otel example-gorm-mysql example-gorm-postgres example-http-clients
 
 # Default target
 help: ## Show this help
@@ -16,12 +16,19 @@ build-dev: ## Build without embedded UI (no Node.js required)
 
 test: ## Run all Go tests
 	@go test ./...
+	@cd collector/gorm && go test ./...
+	@cd collector/http && go test ./...
+
+test-http: ## Run HTTP client collector tests
+	@cd collector/http && go test -race -v ./...
 
 test-ui: ## Run all Go tests with embedded UI
 	@go test -tags profiler_ui ./...
 
 vet: ## Run go vet on all packages
 	@go vet ./...
+	@cd collector/gorm && go vet ./...
+	@cd collector/http && go vet ./...
 
 lint: vet ## Run linting (go vet)
 
@@ -65,3 +72,7 @@ example-gorm-postgres: build ## Run the GORM PostgreSQL example
 	@cd examples/gorm-postgres && docker compose up -d --wait postgres
 	@echo "Starting GORM PostgreSQL example server..."
 	@cd examples/gorm-postgres && GORM_PROFILER_BACKTRACE=1 go run -tags profiler_ui .
+
+example-http-clients: build ## Run the HTTP client collector example
+	@echo "Starting HTTP client collector example..."
+	@cd examples/http-clients && HTTP_PROFILER_BACKTRACE=1 go run -tags profiler_ui .
