@@ -6,6 +6,7 @@ import OtelPanel from '../components/panels/OtelPanel.vue'
 import GormPanel from '../components/panels/GormPanel.vue'
 import ConfigPanel from '../components/panels/ConfigPanel.vue'
 import LoggerPanel from '../components/panels/LoggerPanel.vue'
+import HttpPanel from '../components/panels/HttpPanel.vue'
 
 /**
  * Register all built-in panel components.
@@ -19,4 +20,5 @@ export function initBuiltinPanels(): void {
   registerPanel('gorm', GormPanel)
   registerPanel('config', ConfigPanel)
   registerPanel('logger', LoggerPanel)
+  registerPanel('http', HttpPanel)
 }
